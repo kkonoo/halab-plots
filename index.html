@@ -12,6 +12,10 @@
 
 <header class="top">
   <h1>HaLab Plots <span id="projName"></span></h1>
+  <div class="seg" id="modeSeg" hidden>
+    <button type="button" data-mode="fig" class="on">Figures</button>
+    <button type="button" data-mode="compose">Compose</button>
+  </div>
   <span class="badge" id="adminBadge" hidden>Admin — don't share this link</span>
   <span class="status" id="rStatus">Starting R…</span>
 </header>
@@ -27,7 +31,7 @@
         <a class="btn" id="openLink" target="_blank" rel="noopener">Open</a>
         <button class="btn danger" id="delProj">Remove</button>
       </div>
-      <p class="hint">Save <b>.rds</b> files straight into the project's Drive folder and press ↻.
+      <p class="hint">Save <b>.rds</b> files into the project's Drive folder and press ↻. Subfolders (Fig1, Fig2, …) become groups.
         Saving again under the same name updates the figure; the link stays the same.</p>
       <p class="hint" id="adminMsg"></p>
     </section>
@@ -43,6 +47,8 @@
       <div class="grip" id="grip" title="Drag to resize"></div>
     </div>
     <p class="dims" id="dims"></p>
+    <div class="page" id="page" hidden></div>
+    <p class="dims" id="pageDims"></p>
   </section>
 
   <aside class="panel" id="panel">
@@ -78,6 +84,43 @@
       <button class="btn" id="dlCsv">CSV</button>
       <button class="btn" id="dlTxt">TXT (tab)</button>
     </div>
+  </aside>
+
+  <aside class="panel" id="composePanel" hidden>
+    <h3>Page</h3>
+    <label id="pageGroupBox">Figure <select id="pageGroup"></select></label>
+    <div class="row size">
+      <label>Width <input type="number" id="pgW" min="0" step="1"></label>
+      <label>Height <input type="number" id="pgH" min="0" step="1"></label>
+      <label>Unit <select id="pgUnit"><option>mm</option><option>cm</option><option>in</option></select></label>
+    </div>
+    <p class="hint">Click or drag figures from the left onto the page. Drag a panel to move it and its corner to resize it.
+      Arrow keys nudge the selected panel (Shift: ×5); Delete removes it. Each panel uses that figure's Style settings.</p>
+
+    <h3>Panel letters</h3>
+    <div class="row checks">
+      <label><input type="checkbox" id="ltShow"> Show</label>
+      <label><input type="checkbox" id="ltBold"> Bold</label>
+      <label><input type="checkbox" id="ltLower"> a, b, c</label>
+    </div>
+    <div class="row">
+      <label>Size (pt) <input type="number" id="ltSize" min="4" max="30" step="0.5"></label>
+      <button class="btn" id="ltAuto" title="A, B, C… left to right, top to bottom">Re-letter</button>
+    </div>
+
+    <h3>Selected panel</h3>
+    <div id="selBox"></div>
+
+    <h3>Export</h3>
+    <div class="row">
+      <label>Format <select id="pgFmt">
+        <option value="pdf">PDF</option><option value="svg">SVG</option><option value="tiff">TIFF</option>
+        <option value="png">PNG</option><option value="jpeg">JPG</option>
+      </select></label>
+      <label>DPI <input type="number" id="pgDpi" min="72" max="1200" step="1"></label>
+    </div>
+    <p class="hint" id="pgInfo"></p>
+    <button class="btn primary wide" id="dlPage">Download combined figure</button>
   </aside>
 </main>
 

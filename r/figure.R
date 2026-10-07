@@ -2,7 +2,9 @@
 # A figure file is a saveRDS() of a ggplot / patchwork / pheatmap / grid grob,
 # or of list(plot = <one of those>, table = <data frame or matrix>) to attach a data table.
 
-fb <- new.env()   # the figure on screen: fb$plot, fb$table, fb$kind
+fb <- new.env()   # figures loaded so far: fb$figs[[id]] = list(plot, table, kind, built)
+fb$figs <- list()
+fb_get <- function(id) fb$figs[[id]] %||% stop("This figure isn't loaded yet.")
 
 # Drawing a gtable (pheatmap's figure) needs gtable's methods, and readRDS alone doesn't load the package
 loadNamespace("gtable")
@@ -41,9 +43,10 @@ fb_unwrap <- function(x) {
   list(plot = x, table = table, kind = kind)
 }
 
-fb_load <- function(path) {
+fb_load <- function(path, id) {
   f <- fb_unwrap(fb_read(path))
-  list2env(f, fb)
+  if (f$kind == "ggplot") f$built <- ggplot2::ggplot_build(f$plot)
+  fb$figs[[id]] <- f
   info <- list(kind = f$kind, rows = 0L, cols = 0L)
   if (!is.null(f$table)) info[c("rows", "cols")] <- dim(f$table)
   if (f$kind %in% c("ggplot", "patchwork")) {
@@ -56,8 +59,7 @@ fb_load <- function(path) {
     names(labs) <- keys
     # only plain text labels are editable; expression labels (plotmath) are left as they are
     info$labels <- Filter(function(v) is.character(v) && length(v) == 1, labs)
-    fb$built <- ggplot2::ggplot_build(f$plot)
-    info$style <- fb_style(f$plot, fb$built)
+    info$style <- fb_style(f$plot, f$built)
   }
   if (f$kind == "pheatmap") {
     pal <- fb_heat_palette(f$plot)
@@ -155,8 +157,8 @@ fb_layer <- function(p, i, v) {
 }
 
 # v: list(type = "discrete", values = list(level = colour)) or list(type = "continuous", n = 2|3, low, mid, high, midpoint)
-fb_scale <- function(p, a, v) {
-  old <- fb$built$plot$scales$get_scales(a)
+fb_scale <- function(p, a, v, built) {
+  old <- built$plot$scales$get_scales(a)
   keep <- list(name = old$name, breaks = old$breaks, labels = old$labels, guide = old$guide, na.value = old$na.value, limits = old$limits)
   pick <- function(stem) getExportedValue("ggplot2", paste0("scale_", a, "_", stem))
   sc <- if (v$type == "discrete") do.call(pick("manual"), c(list(values = unlist(v$values)), keep)) else
@@ -194,27 +196,34 @@ fb_heat <- function(g, h) {
   g
 }
 
-# edits: list(labels = list(x = "...", ...), size = <base font size in pt>, layers = list("<i>" = list(size = .., ...)),
-#             scales = list(colour = .., fill = ..), heat = list(n, low, mid, high)). "" removes a label.
-fb_edit <- function(e) {
-  p <- fb$plot
-  if (fb$kind == "pheatmap") return(if (is.null(e$heat)) p else fb_heat(p, e$heat))
-  if (fb$kind == "ggplot") {
+# f: a loaded figure (fb_get). e: list(labels = list(x = "...", ...), size = <base font size in pt>,
+#   layers = list("<i>" = list(size = .., ...)), scales = list(colour = .., fill = ..), heat = list(n, low, mid, high)).
+# "" removes a label.
+fb_edit <- function(f, e) {
+  p <- f$plot
+  if (f$kind == "pheatmap") return(if (is.null(e$heat)) p else fb_heat(p, e$heat))
+  if (f$kind == "ggplot") {
     # settings are kept per figure in the browser; after the file is re-saved a layer or scale may be gone
     for (i in names(e$layers)) if (as.integer(i) <= length(p$layers)) p <- fb_layer(p, as.integer(i), e$layers[[i]])
-    for (a in names(e$scales)) if (!is.null(fb$built$plot$scales$get_scales(a))) p <- fb_scale(p, a, e$scales[[a]])
+    for (a in names(e$scales)) if (!is.null(f$built$plot$scales$get_scales(a))) p <- fb_scale(p, a, e$scales[[a]], f$built)
   }
   if (length(e$labels)) p <- p + do.call(ggplot2::labs, lapply(e$labels, function(v) if (identical(v, "")) NULL else v))
   if (!is.null(e$size)) {
     th <- ggplot2::theme(text = ggplot2::element_text(size = e$size))
-    p <- if (fb$kind == "patchwork") p & th else p + th
+    p <- if (f$kind == "patchwork") p & th else p + th
   }
   p
 }
 
+# Draws into the current grid viewport (a whole page, or one panel of a combined figure)
+fb_draw <- function(f, e) {
+  p <- fb_edit(f, e)
+  set.seed(1)   # ggrepel places labels at random; a fixed seed keeps the preview and the file alike
+  if (f$kind %in% c("ggplot", "patchwork")) print(p, newpage = FALSE) else grid::grid.draw(p)
+}
+
 # w, h in inches; dpi only matters for raster formats
-fb_save <- function(path, fmt, w, h, dpi, edits) {
-  p <- fb_edit(jsonlite::fromJSON(edits, simplifyVector = FALSE))
+fb_device <- function(path, fmt, w, h, dpi) {
   switch(fmt,
     png  = ragg::agg_png(path, w, h, units = "in", res = dpi),
     jpeg = ragg::agg_jpeg(path, w, h, units = "in", res = dpi, quality = 95),
@@ -222,17 +231,37 @@ fb_save <- function(path, fmt, w, h, dpi, edits) {
     pdf  = grDevices::cairo_pdf(path, w, h),
     svg  = svglite::svglite(path, w, h),
     stop("Unknown format: ", fmt))
+  grid::grid.newpage()
+}
+
+fb_save <- function(path, fmt, w, h, dpi, edits, id) {
+  f <- fb_get(id)
+  fb_device(path, fmt, w, h, dpi)
   on.exit(grDevices::dev.off())
-  set.seed(1)   # ggrepel places labels at random; a fixed seed keeps the preview and the file alike
-  if (fb$kind %in% c("ggplot", "patchwork")) print(p) else {
-    grid::grid.newpage()
-    grid::grid.draw(p)
-  }
+  fb_draw(f, jsonlite::fromJSON(edits, simplifyVector = FALSE))
   invisible()
 }
 
-fb_table <- function(path, fmt) {
-  t <- fb$table
+# A combined figure. spec: list(panels = list(list(id, x, y, w, h (inches from the top left), edits, letter)),
+#                              letters = list(size = <pt>, bold = TRUE/FALSE))
+fb_page <- function(path, fmt, w, h, dpi, spec) {
+  s <- jsonlite::fromJSON(spec, simplifyVector = FALSE)
+  fb_device(path, fmt, w, h, dpi)
+  on.exit(grDevices::dev.off())
+  u <- function(v) grid::unit(v, "in")
+  for (pn in s$panels) {
+    grid::pushViewport(grid::viewport(x = u(pn$x), y = u(h - pn$y), width = u(pn$w), height = u(pn$h), just = c("left", "top")))
+    fb_draw(fb_get(pn$id), pn$edits)
+    grid::popViewport()
+  }
+  for (pn in s$panels) if (nzchar(pn$letter %||% ""))   # letters last, so no panel covers them
+    grid::grid.text(pn$letter, x = u(pn$x), y = u(h - pn$y), just = c("left", "top"),
+                    gp = grid::gpar(fontsize = s$letters$size, fontface = if (isTRUE(s$letters$bold)) "bold" else "plain"))
+  invisible()
+}
+
+fb_table <- function(path, fmt, id) {
+  t <- fb_get(id)$table
   t[] <- lapply(t, function(col) if (is.list(col)) vapply(col, function(v) paste(format(v), collapse = ";"), "") else col)
   rn <- is.character(attr(t, "row.names"))   # gene names etc.; plain row numbers are dropped
   out <- utils::capture.output(if (fmt == "csv") utils::write.csv(t, row.names = rn) else

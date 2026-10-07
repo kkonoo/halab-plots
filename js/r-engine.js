@@ -44,23 +44,30 @@ export async function startR() {
   await webR.evalRVoid('source("/tmp/figure.R")');
 }
 
-const json = async code => JSON.parse(await webR.evalRString(code));
-
-export const loadFigure = bytes => run(async () => {
+// R keeps every figure it has loaded (by id), so a combined page can draw several of them
+export const loadFigure = (bytes, id) => run(async () => {
   await put('/tmp/fig.rds', bytes);
-  return json('fb_load("/tmp/fig.rds")');
+  return JSON.parse(await webR.evalRString('fb_load("/tmp/fig.rds", id)', { env: { id } }));
 });
 
-// o = { fmt, w, h (inches), dpi, edits } → file bytes
+// o = { id, fmt, w, h (inches), dpi, edits } → file bytes
 export const drawFigure = o => run(async () => {
   const path = `/tmp/out.${o.fmt}`;
-  await webR.evalRVoid('fb_save(path, fmt, w, h, dpi, edits)',
-    { env: { path, fmt: o.fmt, w: o.w, h: o.h, dpi: o.dpi, edits: JSON.stringify(o.edits) } });
+  await webR.evalRVoid('fb_save(path, fmt, w, h, dpi, edits, id)',
+    { env: { path, id: o.id, fmt: o.fmt, w: o.w, h: o.h, dpi: o.dpi, edits: JSON.stringify(o.edits) } });
   return webR.FS.readFile(path);
 });
 
-export const tableFile = fmt => run(async () => {
+// o = { fmt, w, h, dpi, panels: [{ id, x, y, w, h, edits, letter }], letters: { size, bold } } (inches) → file bytes
+export const drawPage = o => run(async () => {
+  const path = `/tmp/page.${o.fmt}`;
+  await webR.evalRVoid('fb_page(path, fmt, w, h, dpi, spec)',
+    { env: { path, fmt: o.fmt, w: o.w, h: o.h, dpi: o.dpi, spec: JSON.stringify({ panels: o.panels, letters: o.letters }) } });
+  return webR.FS.readFile(path);
+});
+
+export const tableFile = (id, fmt) => run(async () => {
   const path = `/tmp/table.${fmt}`;
-  await webR.evalRVoid('fb_table(path, fmt)', { env: { path, fmt } });
+  await webR.evalRVoid('fb_table(path, fmt, id)', { env: { path, fmt, id } });
   return webR.FS.readFile(path);
 });

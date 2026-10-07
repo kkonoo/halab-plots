@@ -3,6 +3,7 @@
 import { API } from './config.js';
 import * as api from './api.js';
 import * as R from './r-engine.js';
+import { initCompose } from './compose.js';
 
 const $ = id => document.getElementById(id);
 const PX_IN = 96;
@@ -24,10 +25,26 @@ const keep = (k, v) => { try { localStorage.setItem('fb.' + k, JSON.stringify(v)
 const prefs = { unit: 'mm', fmt: 'pdf', dpi: 300, ...load('prefs', {}) };
 const savePrefs = () => keep('prefs', prefs);
 
-const S = { role: null, project: null, projects: [], figs: [], fig: null, info: null, w: 7, h: 5, edits: {} };
-const bytesCache = new Map();
+const S = { role: null, project: null, projects: [], figs: [], fig: null, info: null, w: 7, h: 5, edits: {}, mode: 'fig' };
 const figKey = f => `fig.${S.project.k}.${f.id}`;
 const saveFig = () => S.fig && keep(figKey(S.fig), { w: S.w, h: S.h, edits: S.edits });
+const figEdits = f => (f === S.fig ? S.edits : load(figKey(f), {}).edits) || {};
+
+// Fetches a figure and has R load it (R keeps it, by file id). A re-saved file has a new date → fetched again.
+const loading = new Map();
+function ensureLoaded(f) {
+  const key = f.id + '@' + f.updated;
+  if (!loading.has(key)) {
+    const p = (async () => {
+      const bytes = await api.getFigureBytes(S.project.k, f);
+      await rReady;
+      return R.loadFigure(bytes, f.id);
+    })();
+    p.catch(() => loading.delete(key));   // let a failed one be tried again
+    loading.set(key, p);
+  }
+  return loading.get(key);
+}
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const errText = e => String(e?.message || e).replace(/^Error[^:]*:\s*/, '').trim();
@@ -88,30 +105,82 @@ async function showProject() {
   }
   try {
     S.figs = await api.listFigures(S.project.k);
+    S.figs.forEach(f => { f.group ??= ''; });   // older server versions don't send groups
   } catch (e) {
     S.figs = []; renderList(); clearFig();
     return stageMsg('Could not read the figures: ' + errText(e));
   }
+  $('modeSeg').hidden = false;
   renderList();
-  const f = S.figs.find(f => f.id === S.fig?.id) || S.figs.find(f => f.id === load('last.' + S.project.k)) || S.figs[0];
-  if (f) return selectFig(f);
+  compose.projectChanged();
+  const f = S.figs.find(f => f.id === S.fig?.id) || S.figs.find(f => f.id === load('last.' + S.project.k)) ||
+    S.figs.find(f => f.group === groups()[0]);   // the first one as listed
+  if (f) return S.mode === 'fig' ? selectFig(f) : (S.fig = f);
   clearFig();
   stageMsg(S.role === 'admin' ? 'No .rds files in this project\'s Drive folder yet. Save some there, then press ↻.' : 'No figures in this project yet.');
 }
 
 const fmtSize = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB';
 const fmtDate = t => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+// Subfolders of the project's Drive folder; files right in the folder are '' (shown as "Other" when there are groups)
+const groups = () => [...new Set(S.figs.map(f => f.group))].sort((a, b) => !a - !b || byName(a, b));
 
 function renderList() {
-  $('figList').innerHTML = S.figs.map(f => `<li data-id="${f.id}" class="${f.id === S.fig?.id ? 'on' : ''}">
-    <button class="name">${esc(f.name)}<small>${fmtSize(f.size)} · ${fmtDate(f.updated)}</small></button></li>`).join('');
+  const item = f => `<li class="fig ${f.id === S.fig?.id && S.mode === 'fig' ? 'on' : ''}" data-id="${f.id}" draggable="${S.mode === 'compose'}">
+    <button class="name">${esc(f.name)}<small>${fmtSize(f.size)} · ${fmtDate(f.updated)}</small></button></li>`;
+  const gs = groups();
+  if (gs.length < 2 && !gs[0]) { $('figList').innerHTML = S.figs.map(item).join(''); return; }
+  const closed = new Set(load('closed.' + S.project.k, []));
+  $('figList').innerHTML = gs.map(g => {
+    const fs = S.figs.filter(f => f.group === g), open = !closed.has(g);
+    return `<li class="ghead ${open ? 'open' : ''}" data-g="${esc(g)}"><button class="gname"><span class="tri">▶</span>${esc(g || 'Other')}<span class="count">${fs.length}</span></button></li>` +
+      (open ? fs.map(item).join('') : '');
+  }).join('');
 }
 
 $('figList').addEventListener('click', e => {
   const li = e.target.closest('li');
-  const f = li && S.figs.find(f => f.id === li.dataset.id);
-  if (f && f !== S.fig) selectFig(f);
+  if (!li) return;
+  if (li.classList.contains('ghead')) {
+    const closed = new Set(load('closed.' + S.project.k, [])), g = li.dataset.g;
+    closed.has(g) ? closed.delete(g) : closed.add(g);
+    keep('closed.' + S.project.k, [...closed]);
+    return renderList();
+  }
+  const f = S.figs.find(f => f.id === li.dataset.id);
+  if (!f) return;
+  if (S.mode === 'compose') compose.add(f);
+  else if (f !== S.fig) selectFig(f);
 });
+
+$('figList').addEventListener('dragstart', e => {
+  const li = e.target.closest('li.fig');
+  if (li) e.dataTransfer.setData('text/x-figure', li.dataset.id);
+});
+
+// ---------- Figures / Compose ----------
+$('modeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) setMode(b.dataset.mode);
+});
+
+function setMode(m) {
+  S.mode = m;
+  document.body.classList.toggle('compose', m === 'compose');
+  for (const b of $('modeSeg').children) b.classList.toggle('on', b.dataset.mode === m);
+  $('panel').hidden = m !== 'fig';
+  $('composePanel').hidden = m !== 'compose';
+  stageMsg('');
+  if (m === 'compose') {
+    $('paper').hidden = true; $('dims').textContent = '';
+    compose.show(S.fig?.group);
+  } else {
+    compose.hide();
+    S.fig ? selectFig(S.fig) : clearFig();
+  }
+  renderList();
+}
 
 function clearFig() {
   S.fig = S.info = null;
@@ -128,11 +197,7 @@ async function selectFig(f) {
   renderList(); sizeUI(); styleUI(); textUI(); exportUI();
   stageMsg(''); $('paper').hidden = false; setImg(null); busy(true, 'Loading…');
   try {
-    const key = f.id + '@' + f.updated;   // a re-saved file gets a new date → fetched again
-    if (!bytesCache.has(key)) bytesCache.set(key, await api.getFigureBytes(S.project.k, f));
-    await rReady;
-    if (S.fig !== f) return;
-    const info = await R.loadFigure(bytesCache.get(key));
+    const info = await ensureLoaded(f);
     if (S.fig !== f) return;
     S.info = info;
   } catch (e) {
@@ -164,7 +229,7 @@ async function draw() {
   const f = S.fig;
   try {
     const dpi = PX_IN * Math.min(window.devicePixelRatio || 1, 2);
-    const png = await R.drawFigure({ fmt: 'png', w: S.w, h: S.h, dpi, edits: S.edits });
+    const png = await R.drawFigure({ id: f.id, fmt: 'png', w: S.w, h: S.h, dpi, edits: S.edits });
     if (f === S.fig) { setImg(png); stageMsg(''); }
   } catch (e) {
     if (f === S.fig) { setImg(null); stageMsg('Could not draw at this size (too small?): ' + errText(e)); }
@@ -237,9 +302,13 @@ function gradDefaults(d, n) {
   return { type: 'continuous', n, low: d.low, mid: d.mid, high: d.high, midpoint };
 }
 
+// A colour = the browser's picker (with its eyedropper) + a #RRGGBB box, kept in step
+const colorCtl = (k, v) => `<span class="clr"><input type="color" data-k="${k}" value="${v}">` +
+  `<input type="text" class="hex" data-k="${k}" value="${v}" maxlength="7" spellcheck="false" aria-label="Colour code"></span>`;
+
 function gradientUI(k, title, d, cur, withMidpoint) {
   const v = { ...gradDefaults(d, k === 'heat' ? 3 : 2), ...cur };
-  const color = (p, label) => `<label class="ctl">${label}<input type="color" data-k="${k}.${p}" value="${v[p]}"></label>`;
+  const color = (p, label) => `<label class="ctl">${label}${colorCtl(`${k}.${p}`, v[p])}</label>`;
   return `<fieldset class="grp"><legend>${esc(title)}</legend>
     <div class="ctl">Colours<span class="seg2">${[2, 3].map(n =>
       `<label><input type="radio" name="${k}.n" data-k="${k}.n" value="${n}" ${v.n === n ? 'checked' : ''}>${n}</label>`).join('')}</span></div>
@@ -263,7 +332,7 @@ function styleUI() {
     for (const [p, v0] of Object.entries(L.params)) {
       const P = PARAMS[p], v = e.layers?.[L.i]?.[p] ?? v0, k = `layer.${L.i}.${p}`;
       h += P.min === undefined
-        ? `<label class="ctl">${P.label}<input type="color" data-k="${k}" value="${v}"></label>`
+        ? `<label class="ctl">${P.label}${colorCtl(k, v)}</label>`
         : `<label class="ctl">${P.label}<span class="pair">
             <input type="range" data-k="${k}" min="${P.min}" max="${Math.max(P.max, v0)}" step="${P.step}" value="${v}">
             <input type="number" data-k="${k}" min="${P.min}" step="${P.step}" value="${v}"></span></label>`;
@@ -274,7 +343,7 @@ function styleUI() {
     const title = (a === 'fill' ? 'Fill' : 'Colour') + (sc.name === a ? '' : `: ${sc.name}`);   // name = a when the legend has no title
     if (sc.type === 'continuous') { h += gradientUI(`scale.${a}`, title, sc, e.scales?.[a], true); continue; }
     h += `<fieldset class="grp"><legend>${esc(title)}</legend><div class="swatches">${sc.levels.map((lv, j) =>
-      `<label class="sw"><input type="color" data-k="scale.${a}.${j}" value="${e.scales?.[a]?.values?.[lv] ?? sc.colors[j]}"><span>${esc(lv)}</span></label>`).join('')}</div></fieldset>`;
+      `<label class="sw">${colorCtl(`scale.${a}.${j}`, e.scales?.[a]?.values?.[lv] ?? sc.colors[j])}<span>${esc(lv)}</span></label>`).join('')}</div></fieldset>`;
   }
   if (i.heat) h += gradientUI('heat', 'Colour bar', i.heat, e.heat, false);
   h += '<button class="btn" id="resetStyle">Reset style</button>';
@@ -289,9 +358,16 @@ function styleInput(t) {
   if (t.type === 'range' || t.type === 'number') {
     v = parseFloat(v);
     if (!Number.isFinite(v)) return;
-    const twin = t.parentElement.querySelector(`input:not([type=${t.type}])`);
-    if (twin) twin.value = v;   // keep the slider and the number box together
   }
+  if (t.classList.contains('hex')) {   // wait until it is a whole colour code (#abc or #aabbcc)
+    const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v.trim());
+    t.classList.toggle('bad', !m);
+    if (!m) return;
+    v = '#' + (m[1].length === 3 ? [...m[1]].map(c => c + c).join('') : m[1]).toLowerCase();
+  }
+  // keep the slider and number box (or the picker and colour code) together
+  const twin = t.parentElement.querySelector(`input[data-k="${k}"]:not([type="${t.type}"])`);
+  if (twin) twin.value = v;
   const e = S.edits;
   if (kind === 'layer') {
     e.layers = { ...e.layers, [a]: { ...e.layers?.[a], [b]: v } };
@@ -312,7 +388,14 @@ function styleInput(t) {
 }
 
 $('styleBox').addEventListener('input', e => { if (e.target.type !== 'radio') styleInput(e.target); });
-$('styleBox').addEventListener('change', e => { if (e.target.type === 'radio') styleInput(e.target); });
+$('styleBox').addEventListener('change', e => {
+  const t = e.target;
+  if (t.type === 'radio') styleInput(t);
+  if (t.classList.contains('bad')) {   // left with an unfinished code → show the colour in use again
+    t.value = t.parentElement.querySelector('input[type=color]').value;
+    t.classList.remove('bad');
+  }
+});
 $('styleBox').addEventListener('click', e => {
   if (e.target.id !== 'resetStyle') return;
   delete S.edits.layers; delete S.edits.scales; delete S.edits.heat;
@@ -395,7 +478,7 @@ $('dlFig').addEventListener('click', async () => {
   const btn = $('dlFig');
   btn.disabled = true; btn.textContent = 'Preparing…';
   try {
-    saveFile(await R.drawFigure({ fmt, w: S.w, h: S.h, dpi, edits: S.edits }), name, MIME[fmt]);
+    saveFile(await R.drawFigure({ id: S.fig.id, fmt, w: S.w, h: S.h, dpi, edits: S.edits }), name, MIME[fmt]);
   } catch (e) {
     alert('Could not make the file: ' + errText(e));
   }
@@ -405,7 +488,7 @@ $('dlFig').addEventListener('click', async () => {
 for (const [id, fmt, type] of [['dlCsv', 'csv', 'text/csv'], ['dlTxt', 'txt', 'text/plain']]) {
   $(id).addEventListener('click', async () => {
     try {
-      saveFile(await R.tableFile(fmt), `${fileBase()}_data.${fmt}`, type);
+      saveFile(await R.tableFile(S.fig.id, fmt), `${fileBase()}_data.${fmt}`, type);
     } catch (e) {
       alert('Could not make the table: ' + errText(e));
     }
@@ -455,3 +538,12 @@ $('delProj').addEventListener('click', async () => {
 
 // New or re-saved files in the Drive folder
 $('refresh').addEventListener('click', () => S.project && showProject());
+
+// ---------- compose (js/compose.js) ----------
+const compose = initCompose({
+  $, R, PX_IN, UNITS, SNAP, MIME, EXT, MAX_PIXELS, num, esc, errText, load, keep, prefs, savePrefs, saveFile,
+  ensureLoaded, figEdits, groups,
+  project: () => S.project,
+  figs: () => S.figs,
+  editFigure: f => { S.fig = f; setMode('fig'); },
+});
