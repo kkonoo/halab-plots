@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Figure Builder</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%235f8a6a'/%3E%3Cpath d='M9 22l5-6 4 3 5-8' stroke='%23fff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="top">
+  <h1>Figure Builder <span id="projName"></span></h1>
+  <span class="badge" id="adminBadge" hidden>Admin — don't share this link</span>
+  <span class="status" id="rStatus">Starting R…</span>
+</header>
+
+<main class="layout">
+  <aside class="side">
+    <section class="admin" id="adminBox" hidden>
+      <label>Project <select id="projSel"></select></label>
+      <div class="row">
+        <button class="btn" id="newProj">New</button>
+        <button class="btn" id="copyLink">Copy link</button>
+        <a class="btn" id="openLink" target="_blank" rel="noopener">Open</a>
+        <button class="btn danger" id="delProj">Delete</button>
+      </div>
+      <label class="drop" id="drop">
+        <input type="file" id="fileIn" accept=".rds" multiple hidden>
+        Drop <b>.rds</b> files here or click.<br>Same name replaces the figure; the link stays the same.
+      </label>
+      <ul class="log" id="upLog"></ul>
+    </section>
+    <h2>Figures</h2>
+    <ul class="figs" id="figList"></ul>
+  </aside>
+
+  <section class="stage" id="stage">
+    <p class="msg" id="stageMsg"></p>
+    <div class="paper" id="paper" hidden>
+      <img id="figImg" alt="">
+      <div class="busy" id="busy" hidden>Drawing…</div>
+      <div class="grip" id="grip" title="Drag to resize"></div>
+    </div>
+    <p class="dims" id="dims"></p>
+  </section>
+
+  <aside class="panel" id="panel">
+    <h3>Size</h3>
+    <div class="row size">
+      <label>Width <input type="number" id="wIn" min="0" step="1"></label>
+      <label>Height <input type="number" id="hIn" min="0" step="1"></label>
+      <label>Unit <select id="unit"><option>mm</option><option>cm</option><option>in</option></select></label>
+    </div>
+    <p class="hint">Drag the figure's corner or type a size. Text keeps its point size, so the file looks exactly like the preview.
+      Journal widths: single column 85–89 mm, double 174–183 mm.</p>
+
+    <h3>Text</h3>
+    <div id="textBox"></div>
+
+    <h3>Export</h3>
+    <div class="row">
+      <label>Format <select id="fmt">
+        <option value="pdf">PDF</option><option value="svg">SVG</option><option value="tiff">TIFF</option>
+        <option value="png">PNG</option><option value="jpeg">JPG</option>
+      </select></label>
+      <label>DPI <input type="number" id="dpi" min="72" max="1200" step="1"></label>
+    </div>
+    <p class="hint" id="exportInfo"></p>
+    <button class="btn primary wide" id="dlFig">Download figure</button>
+
+    <h3>Data</h3>
+    <p class="hint" id="tableInfo"></p>
+    <div class="row">
+      <button class="btn" id="dlCsv">CSV</button>
+      <button class="btn" id="dlTxt">TXT (tab)</button>
+    </div>
+  </aside>
+</main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
