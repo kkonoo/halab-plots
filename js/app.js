@@ -55,9 +55,22 @@ const setStatus = t => { $('rStatus').textContent = t; };
 
 // ---------- start ----------
 const rReady = R.startR();
-rReady.then(() => setStatus('R ready'), e => { console.error(e); setStatus('R could not start — reload the page'); });
+rReady.then(font => {
+  setStatus(font === 'Arial' ? 'R ready · Arial' : 'R ready · Arimo');
+  $('rStatus').title = font === 'Arial' ? 'Plots use the Arial installed on this computer.'
+    : 'Plots use Arimo, which has the same letter widths as Arial.';
+  $('fontBtn').hidden = font === 'Arial' || !R.canAskFonts();
+}, e => { console.error(e); setStatus('R could not start — reload the page'); });
 setStatus('Starting R… (a few seconds on the first visit)');
 start();
+
+// Arial can only be read from this computer with the viewer's permission; R picks fonts at start, hence the reload
+$('fontBtn').addEventListener('click', async () => {
+  const got = await R.localArial(true);
+  if (got.some(f => f.postscriptName === 'ArialMT')) return location.reload();
+  $('fontBtn').hidden = true;
+  setStatus('R ready · Arimo (Arial not found or not allowed)');
+});
 
 async function start() {
   const k = new URLSearchParams(location.search).get('k')?.trim();
