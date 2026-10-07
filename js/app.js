@@ -97,27 +97,38 @@ async function refreshProjects(pick) {
 }
 
 async function showProject() {
-  $('projName').textContent = S.project.name;
-  document.title = `${S.project.name} · HaLab Plots`;
+  const proj = S.project;
+  $('projName').textContent = proj.name;
+  document.title = `${proj.name} · HaLab Plots`;
   if (S.role === 'admin') {
-    keep('lastProject', S.project.k);
+    keep('lastProject', proj.k);
     $('openLink').href = projectLink();
   }
+  $('figList').innerHTML = '<li class="hint">Reading the Drive folder…</li>';
+  let figs;
   try {
-    S.figs = await api.listFigures(S.project.k);
-    S.figs.forEach(f => { f.group ??= ''; });   // older server versions don't send groups
+    figs = await api.listFigures(proj.k);
   } catch (e) {
+    if (S.project !== proj) return;
     S.figs = []; renderList(); clearFig();
     return stageMsg('Could not read the figures: ' + errText(e));
   }
-  $('modeSeg').hidden = false;
-  renderList();
-  compose.projectChanged();
-  const f = S.figs.find(f => f.id === S.fig?.id) || S.figs.find(f => f.id === load('last.' + S.project.k)) ||
-    S.figs.find(f => f.group === groups()[0]);   // the first one as listed
-  if (f) return S.mode === 'fig' ? selectFig(f) : (S.fig = f);
-  clearFig();
-  stageMsg(S.role === 'admin' ? 'No .rds files in this project\'s Drive folder yet. Save some there, then press ↻.' : 'No figures in this project yet.');
+  if (S.project !== proj) return;   // another project was picked meanwhile
+  try {
+    S.figs = figs;
+    S.figs.forEach(f => { f.group ??= ''; });   // older server versions don't send groups
+    $('modeSeg').hidden = false;
+    renderList();
+    compose.projectChanged();
+    const f = S.figs.find(f => f.id === S.fig?.id) || S.figs.find(f => f.id === load('last.' + proj.k)) ||
+      S.figs.find(f => f.group === groups()[0]);   // the first one as listed
+    if (f) return S.mode === 'fig' ? selectFig(f) : (S.fig = f);
+    clearFig();
+    stageMsg(S.role === 'admin' ? 'No .rds files in this project\'s Drive folder yet. Save some there, then press ↻.' : 'No figures in this project yet.');
+  } catch (e) {
+    console.error(e);
+    stageMsg('Something went wrong showing the figures: ' + errText(e));
+  }
 }
 
 const fmtSize = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB';

@@ -57,6 +57,7 @@ input:disabled { opacity: .5; }
 .figs { list-style: none; margin: 0; padding: 0; }
 .figs li { display: flex; align-items: center; border-radius: 6px; }
 .figs li.on { background: var(--accent-soft); }
+.figs li.hint { padding: 4px 8px; }
 .figs .name { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 7px 8px; cursor: pointer; overflow-wrap: anywhere; }
 .figs .name small { display: block; color: var(--muted); font-size: 11px; }
 .figs-head { display: flex; align-items: center; justify-content: space-between; }
