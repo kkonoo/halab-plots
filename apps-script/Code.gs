@@ -10,6 +10,7 @@
  */
 const SITE = 'https://kkonoo.github.io/halab-plots/';
 const MAX_MB = 30;
+const VERSION = '2026-10-07 groups';   // shown at the /exec address — tells which code is deployed
 
 function setup() {
   const p = PropertiesService.getScriptProperties();
@@ -18,7 +19,7 @@ function setup() {
   Logger.log('관리자 링크 (공유 금지): ' + SITE + '?k=' + p.getProperty('ADMIN'));
 }
 
-function doGet() { return out_({ ok: true, msg: 'halab-plots server' }); }
+function doGet() { return out_({ ok: true, msg: 'halab-plots server', version: VERSION }); }
 
 function doPost(e) {
   try {
