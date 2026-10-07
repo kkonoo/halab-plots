@@ -84,6 +84,22 @@ input:disabled { opacity: .5; }
 
 #textBox label input[type=text] { font-size: 13px; }
 
+.grp { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 4px; margin: 0 0 10px; }
+.grp legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
+.ctl { display: grid; grid-template-columns: 74px 1fr; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ctl input[type=color], .sw input[type=color] {
+  width: 34px; height: 24px; padding: 1px; margin: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); cursor: pointer;
+}
+.pair { display: flex; align-items: center; gap: 6px; }
+.pair input[type=range] { flex: 1; width: auto; min-width: 0; margin: 0; padding: 0; accent-color: var(--accent); }
+.pair input[type=number] { width: 62px; margin: 0; padding: 3px 5px; }
+.ctl > input[type=number] { width: 80px; margin: 0; padding: 3px 5px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 6px; }
+.sw { display: flex; align-items: center; gap: 5px; margin: 0; color: var(--text); font-size: 12px; }
+.seg2 { display: flex; gap: 12px; margin: 0; }
+.seg2 label { display: flex; align-items: center; gap: 4px; margin: 0; color: var(--text); }
+.seg2 input { width: auto; margin: 0; }
+
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; height: auto; }
   .side, .panel { border: 0; border-bottom: 1px solid var(--line); }

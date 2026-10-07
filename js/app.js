@@ -117,7 +117,7 @@ function clearFig() {
   S.fig = S.info = null;
   $('paper').hidden = true;
   $('dims').textContent = '';
-  textUI(); exportUI();
+  styleUI(); textUI(); exportUI();
 }
 
 async function selectFig(f) {
@@ -125,7 +125,7 @@ async function selectFig(f) {
   keep('last.' + S.project.k, f.id);
   const saved = load(figKey(f), {});
   S.w = saved.w || 7; S.h = saved.h || 5; S.edits = saved.edits || {};
-  renderList(); sizeUI(); textUI(); exportUI();
+  renderList(); sizeUI(); styleUI(); textUI(); exportUI();
   stageMsg(''); $('paper').hidden = false; setImg(null); busy(true, 'Loading…');
   try {
     const key = f.id + '@' + f.updated;   // a re-saved file gets a new date → fetched again
@@ -140,7 +140,7 @@ async function selectFig(f) {
     if (S.fig === f) { busy(false); $('paper').hidden = true; stageMsg('Could not open this figure: ' + errText(e)); }
     return;
   }
-  textUI(); exportUI(); draw();
+  styleUI(); textUI(); exportUI(); draw();
 }
 
 // ---------- preview ----------
@@ -218,6 +218,107 @@ $('grip').addEventListener('pointerdown', e => {
   g.addEventListener('pointercancel', up);
 });
 
+// ---------- style ----------
+// What R found in the figure (r/figure.R fb_style): per layer the settings that don't vary with the data,
+// and the colour / fill scales. pheatmap: its colour bar.
+const PARAMS = {
+  size: { label: 'Size', min: 0, max: 8, step: 0.01 },
+  size_pt: { label: 'Size (pt)', min: 2, max: 24, step: 0.5 },
+  alpha: { label: 'Opacity', min: 0, max: 1, step: 0.05 },
+  width: { label: 'Width', min: 0.05, max: 1, step: 0.05 },
+  linewidth: { label: 'Line width', min: 0, max: 3, step: 0.05 },
+  colour: { label: 'Colour' },
+  fill: { label: 'Fill' },
+};
+
+function gradDefaults(d, n) {
+  const lim = d.limits;
+  const midpoint = lim ? (lim[0] < 0 && lim[1] > 0 ? 0 : +((lim[0] + lim[1]) / 2).toPrecision(3)) : undefined;
+  return { type: 'continuous', n, low: d.low, mid: d.mid, high: d.high, midpoint };
+}
+
+function gradientUI(k, title, d, cur, withMidpoint) {
+  const v = { ...gradDefaults(d, k === 'heat' ? 3 : 2), ...cur };
+  const color = (p, label) => `<label class="ctl">${label}<input type="color" data-k="${k}.${p}" value="${v[p]}"></label>`;
+  return `<fieldset class="grp"><legend>${esc(title)}</legend>
+    <div class="ctl">Colours<span class="seg2">${[2, 3].map(n =>
+      `<label><input type="radio" name="${k}.n" data-k="${k}.n" value="${n}" ${v.n === n ? 'checked' : ''}>${n}</label>`).join('')}</span></div>
+    ${color('low', 'Low')}${v.n === 3 ? color('mid', 'Middle') : ''}${color('high', 'High')}
+    ${withMidpoint && v.n === 3 ? `<label class="ctl">Middle at<input type="number" data-k="${k}.midpoint" step="any" value="${v.midpoint}"></label>` : ''}
+    ${d.limits ? `<p class="hint">Data range ${d.limits.map(x => +x.toPrecision(3)).join(' to ')}</p>` : ''}</fieldset>`;
+}
+
+function styleUI() {
+  const i = S.info, box = $('styleBox');
+  if (!i) { box.innerHTML = '<p class="hint">—</p>'; return; }
+  const layers = i.style?.layers || [], scales = Object.entries(i.style?.scales || {});
+  if (!layers.length && !scales.length && !i.heat) {
+    box.innerHTML = `<p class="hint">${i.kind === 'patchwork' ? 'Combined (patchwork) figures: only size and text.' : 'Nothing to change here for this figure.'}</p>`;
+    return;
+  }
+  const e = S.edits;
+  let h = '';
+  for (const L of layers) {
+    h += `<fieldset class="grp"><legend>${esc(L.name)}</legend>`;
+    for (const [p, v0] of Object.entries(L.params)) {
+      const P = PARAMS[p], v = e.layers?.[L.i]?.[p] ?? v0, k = `layer.${L.i}.${p}`;
+      h += P.min === undefined
+        ? `<label class="ctl">${P.label}<input type="color" data-k="${k}" value="${v}"></label>`
+        : `<label class="ctl">${P.label}<span class="pair">
+            <input type="range" data-k="${k}" min="${P.min}" max="${Math.max(P.max, v0)}" step="${P.step}" value="${v}">
+            <input type="number" data-k="${k}" min="${P.min}" step="${P.step}" value="${v}"></span></label>`;
+    }
+    h += '</fieldset>';
+  }
+  for (const [a, sc] of scales) {
+    const title = (a === 'fill' ? 'Fill' : 'Colour') + (sc.name === a ? '' : `: ${sc.name}`);   // name = a when the legend has no title
+    if (sc.type === 'continuous') { h += gradientUI(`scale.${a}`, title, sc, e.scales?.[a], true); continue; }
+    h += `<fieldset class="grp"><legend>${esc(title)}</legend><div class="swatches">${sc.levels.map((lv, j) =>
+      `<label class="sw"><input type="color" data-k="scale.${a}.${j}" value="${e.scales?.[a]?.values?.[lv] ?? sc.colors[j]}"><span>${esc(lv)}</span></label>`).join('')}</div></fieldset>`;
+  }
+  if (i.heat) h += gradientUI('heat', 'Colour bar', i.heat, e.heat, false);
+  h += '<button class="btn" id="resetStyle">Reset style</button>';
+  box.innerHTML = h;
+}
+
+function styleInput(t) {
+  const k = t.dataset.k;
+  if (!k) return;
+  const [kind, a, b] = k.split('.');
+  let v = t.value;
+  if (t.type === 'range' || t.type === 'number') {
+    v = parseFloat(v);
+    if (!Number.isFinite(v)) return;
+    const twin = t.parentElement.querySelector(`input:not([type=${t.type}])`);
+    if (twin) twin.value = v;   // keep the slider and the number box together
+  }
+  const e = S.edits;
+  if (kind === 'layer') {
+    e.layers = { ...e.layers, [a]: { ...e.layers?.[a], [b]: v } };
+  } else if (kind === 'scale') {
+    const sc = S.info.style.scales[a];
+    e.scales = { ...e.scales };
+    if (sc.type === 'discrete') {
+      const values = e.scales[a]?.values || Object.fromEntries(sc.levels.map((lv, j) => [lv, sc.colors[j]]));
+      e.scales[a] = { type: 'discrete', values: { ...values, [sc.levels[+b]]: v } };
+    } else {
+      e.scales[a] = { ...gradDefaults(sc, 2), ...e.scales[a], [b]: b === 'n' ? +v : b === 'midpoint' ? parseFloat(v) : v };
+    }
+  } else if (kind === 'heat') {
+    e.heat = { ...gradDefaults(S.info.heat, 3), ...e.heat, [a]: a === 'n' ? +v : v };
+  }
+  saveFig(); schedule(400);
+  if (t.type === 'radio') styleUI();   // 2 ↔ 3 colours shows or hides the middle colour
+}
+
+$('styleBox').addEventListener('input', e => { if (e.target.type !== 'radio') styleInput(e.target); });
+$('styleBox').addEventListener('change', e => { if (e.target.type === 'radio') styleInput(e.target); });
+$('styleBox').addEventListener('click', e => {
+  if (e.target.id !== 'resetStyle') return;
+  delete S.edits.layers; delete S.edits.scales; delete S.edits.heat;
+  saveFig(); styleUI(); draw();
+});
+
 // ---------- text ----------
 function textUI() {
   const i = S.info, box = $('textBox');
@@ -235,7 +336,7 @@ function textUI() {
   } else {
     html += '<p class="hint">Labels of combined (patchwork) figures can\'t be changed here.</p>';
   }
-  html += '<p class="hint">Points and text drawn inside the plot keep their size.</p><button class="btn" id="resetText">Reset text</button>';
+  html += '<p class="hint">Point and in-plot label sizes are under Style.</p><button class="btn" id="resetText">Reset text</button>';
   box.innerHTML = html;
 }
 
@@ -251,7 +352,8 @@ $('textBox').addEventListener('input', e => {
 
 $('textBox').addEventListener('click', e => {
   if (e.target.id !== 'resetText') return;
-  S.edits = {}; saveFig(); textUI(); draw();
+  delete S.edits.labels; delete S.edits.size;
+  saveFig(); textUI(); draw();
 });
 
 // ---------- export ----------

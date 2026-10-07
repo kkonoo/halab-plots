@@ -56,13 +56,154 @@ fb_load <- function(path) {
     names(labs) <- keys
     # only plain text labels are editable; expression labels (plotmath) are left as they are
     info$labels <- Filter(function(v) is.character(v) && length(v) == 1, labs)
+    fb$built <- ggplot2::ggplot_build(f$plot)
+    info$style <- fb_style(f$plot, fb$built)
+  }
+  if (f$kind == "pheatmap") {
+    pal <- fb_heat_palette(f$plot)
+    if (length(pal)) info$heat <- lapply(list(low = 1, mid = ceiling(length(pal) / 2), high = length(pal)), function(i) fb_hex(pal[i]))
   }
   jsonlite::toJSON(info, auto_unbox = TRUE)
 }
 
-# edits: list(labels = list(x = "...", ...), size = <base font size in pt>). "" removes a label.
+# ---------- style ----------
+# What can be changed per kind of layer: name on the page, settings. A layer takes the first of its geom's classes found here.
+FB_GEOMS <- list(
+  GeomPoint      = list("Points", c("size", "alpha", "colour")),
+  GeomBar        = list("Bars", c("width", "alpha", "fill")),          # also geom_col, geom_histogram
+  GeomBoxplot    = list("Boxes", c("width", "alpha", "fill")),
+  GeomViolin     = list("Violins", c("width", "alpha", "fill")),
+  GeomErrorbar   = list("Error bars", c("width", "linewidth", "colour")),
+  GeomTextRepel  = list("Text labels", c("size_pt", "colour")),
+  GeomLabelRepel = list("Text labels", c("size_pt", "colour")),
+  GeomText       = list("Text labels", c("size_pt", "colour")),
+  GeomLabel      = list("Text labels", c("size_pt", "colour")),
+  GeomSmooth     = list("Trend line", c("linewidth", "colour")),
+  GeomVline      = list("Reference line", c("linewidth", "colour")),
+  GeomHline      = list("Reference line", c("linewidth", "colour")),
+  GeomAbline     = list("Reference line", c("linewidth", "colour")),
+  GeomPath       = list("Lines", c("linewidth", "alpha", "colour")),   # also geom_line, geom_step
+  GeomRibbon     = list("Areas", c("alpha", "fill"))                   # also geom_area, geom_density
+)
+
+fb_hex <- function(x) {
+  x <- x[!is.na(x)]
+  if (!length(x)) return("#999999")
+  m <- grDevices::col2rgb(x[1])
+  grDevices::rgb(m[1], m[2], m[3], maxColorValue = 255)
+}
+
+# Current values, read from the built plot. A setting that varies with the data is left out
+# (colour/fill mapped to a variable are changed through its scale instead).
+fb_style <- function(p, b) {
+  layers <- list()
+  for (i in seq_along(p$layers)) {
+    l <- p$layers[[i]]
+    hit <- intersect(class(l$geom), names(FB_GEOMS))
+    if (!length(hit)) next
+    g <- FB_GEOMS[[hit[1]]]
+    params <- list()
+    for (k in g[[2]]) {
+      if (k == "width") {
+        params$width <- l$geom_params$width %||% l$aes_params$width %||% l$stat_params$width %||% 0.9
+        next
+      }
+      v <- unique(b$data[[i]][[if (k == "size_pt") "size" else k]])
+      if (length(v) != 1) next
+      params[[k]] <- switch(k, colour = , fill = fb_hex(v), alpha = if (is.na(v)) 1 else v,
+                            size_pt = round(v * ggplot2::.pt, 1), v)
+    }
+    if (length(params)) layers[[length(layers) + 1]] <- list(i = i, name = g[[1]], params = params)
+  }
+  scales <- list()
+  for (a in c("colour", "fill")) {
+    s <- b$plot$scales$get_scales(a)
+    if (is.null(s) || inherits(s, c("ScaleDiscreteIdentity", "ScaleContinuousIdentity", "ScaleBinned"))) next
+    name <- ggplot2::get_labs(p)[[a]]
+    name <- if (is.character(name) && length(name) == 1) name else a
+    if (s$is_discrete()) {
+      lv <- s$get_limits()
+      if (!length(lv) || length(lv) > 40) next
+      scales[[a]] <- list(type = "discrete", name = name, levels = as.list(as.character(lv)), colors = lapply(s$map(lv), fb_hex))
+    } else {
+      lim <- s$get_limits()
+      if (length(lim) != 2 || any(!is.finite(lim))) next
+      scales[[a]] <- list(type = "continuous", name = name, limits = lim,
+                          low = fb_hex(s$map(lim[1])), mid = fb_hex(s$map(mean(lim))), high = fb_hex(s$map(lim[2])))
+    }
+  }
+  list(layers = layers, scales = scales)
+}
+
+fb_layer <- function(p, i, v) {
+  # A full copy, so the figure as loaded stays unchanged. (Not ggproto(NULL, layer): after a layer has been
+  # drawn once, building such a child overflows the stack in ggplot2 4.0.)
+  l <- unserialize(serialize(p$layers[[i]], NULL))
+  if (!is.null(v$size_pt)) {
+    v$size <- v$size_pt / ggplot2::.pt
+    v$size_pt <- NULL
+  }
+  if (!is.null(v$width)) {
+    l$geom_params$width <- v$width
+    if ("width" %in% l$stat$parameters()) l$stat_params$width <- v$width   # geom_bar, geom_boxplot work it out in the stat
+    if (!is.null(l$aes_params$width)) l$aes_params$width <- v$width
+    v$width <- NULL
+  }
+  if (length(v)) l$aes_params <- utils::modifyList(l$aes_params, v)
+  p$layers[[i]] <- l
+  p
+}
+
+# v: list(type = "discrete", values = list(level = colour)) or list(type = "continuous", n = 2|3, low, mid, high, midpoint)
+fb_scale <- function(p, a, v) {
+  old <- fb$built$plot$scales$get_scales(a)
+  keep <- list(name = old$name, breaks = old$breaks, labels = old$labels, guide = old$guide, na.value = old$na.value, limits = old$limits)
+  pick <- function(stem) getExportedValue("ggplot2", paste0("scale_", a, "_", stem))
+  sc <- if (v$type == "discrete") do.call(pick("manual"), c(list(values = unlist(v$values)), keep)) else
+    if (identical(as.numeric(v$n), 2)) do.call(pick("gradient"), c(list(low = v$low, high = v$high, oob = old$oob), keep)) else
+    do.call(pick("gradient2"), c(list(low = v$low, mid = v$mid, high = v$high, midpoint = v$midpoint %||% 0, oob = old$oob), keep))
+  suppressMessages(p + sc)
+}
+
+# pheatmap draws fixed colours. Every cell's colour is one of the legend's colours, so recolouring the
+# legend palette (same breaks) and swapping each cell's colour by its place in it gives the new heatmap.
+fb_heat_palette <- function(g) {
+  li <- which(g$layout$name == "legend")
+  if (!length(li)) return(NULL)
+  r <- Filter(function(x) inherits(x, "rect"), g$grobs[[li]]$children)
+  if (length(r)) r[[1]]$gp$fill
+}
+
+fb_heat <- function(g, h) {
+  old <- fb_heat_palette(g)
+  if (is.null(old)) return(g)
+  cols <- unlist(if (identical(as.numeric(h$n), 2)) h[c("low", "high")] else h[c("low", "mid", "high")])
+  new <- grDevices::colorRampPalette(cols)(length(old))
+  recolour <- function(x) {
+    if (!inherits(x, "rect")) return(x)
+    f <- x$gp$fill
+    idx <- match(f, old)
+    f[!is.na(idx)] <- new[idx[!is.na(idx)]]   # NA cells (na_col) are not in the palette and stay as they were
+    x$gp$fill <- f
+    x
+  }
+  for (nm in c("legend", "matrix")) {
+    j <- which(g$layout$name == nm)
+    if (length(j)) g$grobs[[j]]$children <- do.call(grid::gList, lapply(g$grobs[[j]]$children, recolour))
+  }
+  g
+}
+
+# edits: list(labels = list(x = "...", ...), size = <base font size in pt>, layers = list("<i>" = list(size = .., ...)),
+#             scales = list(colour = .., fill = ..), heat = list(n, low, mid, high)). "" removes a label.
 fb_edit <- function(e) {
   p <- fb$plot
+  if (fb$kind == "pheatmap") return(if (is.null(e$heat)) p else fb_heat(p, e$heat))
+  if (fb$kind == "ggplot") {
+    # settings are kept per figure in the browser; after the file is re-saved a layer or scale may be gone
+    for (i in names(e$layers)) if (as.integer(i) <= length(p$layers)) p <- fb_layer(p, as.integer(i), e$layers[[i]])
+    for (a in names(e$scales)) if (!is.null(fb$built$plot$scales$get_scales(a))) p <- fb_scale(p, a, e$scales[[a]])
+  }
   if (length(e$labels)) p <- p + do.call(ggplot2::labs, lapply(e$labels, function(v) if (identical(v, "")) NULL else v))
   if (!is.null(e$size)) {
     th <- ggplot2::theme(text = ggplot2::element_text(size = e$size))
