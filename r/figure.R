@@ -1,4 +1,4 @@
-# Ha Lab Plots — R side. Runs inside webR in the browser; js/r-engine.js calls these functions.
+# HaLab Plots — R side. Runs inside webR in the browser; js/r-engine.js calls these functions.
 # A figure file is a saveRDS() of a ggplot / patchwork / pheatmap / grid grob,
 # or of list(plot = <one of those>, table = <data frame or matrix>) to attach a data table.
 

@@ -1,4 +1,4 @@
-// Ha Lab Plots — page logic. Figures come from Google Drive through Apps Script (api.js) and are drawn by R in the browser (r-engine.js).
+// HaLab Plots — page logic. Figures come from Google Drive through Apps Script (api.js) and are drawn by R in the browser (r-engine.js).
 // The preview box is the exported size: 96 CSS px = 1 inch, and R draws text at its real point size.
 import { API } from './config.js';
 import * as api from './api.js';
@@ -81,7 +81,7 @@ async function refreshProjects(pick) {
 
 async function showProject() {
   $('projName').textContent = S.project.name;
-  document.title = `${S.project.name} · Ha Lab Plots`;
+  document.title = `${S.project.name} · HaLab Plots`;
   if (S.role === 'admin') {
     keep('lastProject', S.project.k);
     $('openLink').href = projectLink();
