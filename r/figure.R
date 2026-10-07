@@ -1,4 +1,4 @@
-# Figure Builder — R side. Runs inside webR in the browser; js/r-engine.js calls these functions.
+# Ha Lab Plots — R side. Runs inside webR in the browser; js/r-engine.js calls these functions.
 # A figure file is a saveRDS() of a ggplot / patchwork / pheatmap / grid grob,
 # or of list(plot = <one of those>, table = <data frame or matrix>) to attach a data table.
 
@@ -41,21 +41,11 @@ fb_unwrap <- function(x) {
   list(plot = x, table = table, kind = kind)
 }
 
-fb_summary <- function(f) {
-  info <- list(kind = f$kind, rows = 0L, cols = 0L)
-  if (!is.null(f$table)) info[c("rows", "cols")] <- dim(f$table)
-  info
-}
-
-# Check a file before upload, without touching the figure on screen
-fb_check <- function(path) {
-  jsonlite::toJSON(fb_summary(fb_unwrap(fb_read(path))), auto_unbox = TRUE)
-}
-
 fb_load <- function(path) {
   f <- fb_unwrap(fb_read(path))
   list2env(f, fb)
-  info <- fb_summary(f)
+  info <- list(kind = f$kind, rows = 0L, cols = 0L)
+  if (!is.null(f$table)) info[c("rows", "cols")] <- dim(f$table)
   if (f$kind %in% c("ggplot", "patchwork")) {
     size <- tryCatch(ggplot2::calc_element("text", ggplot2::complete_theme(f$plot$theme))$size, error = function(e) NULL)
     if (is.numeric(size)) info$size <- size

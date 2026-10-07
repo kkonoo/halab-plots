@@ -46,11 +46,6 @@ export async function startR() {
 
 const json = async code => JSON.parse(await webR.evalRString(code));
 
-export const checkFigure = bytes => run(async () => {
-  await put('/tmp/check.rds', bytes);
-  return json('fb_check("/tmp/check.rds")');
-});
-
 export const loadFigure = bytes => run(async () => {
   await put('/tmp/fig.rds', bytes);
   return json('fb_load("/tmp/fig.rds")');

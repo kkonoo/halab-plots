@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Figure Builder</title>
+<title>Ha Lab Plots</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%235f8a6a'/%3E%3Cpath d='M9 22l5-6 4 3 5-8' stroke='%23fff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
 <header class="top">
-  <h1>Figure Builder <span id="projName"></span></h1>
+  <h1>Ha Lab Plots <span id="projName"></span></h1>
   <span class="badge" id="adminBadge" hidden>Admin — don't share this link</span>
   <span class="status" id="rStatus">Starting R…</span>
 </header>
@@ -20,19 +20,18 @@
   <aside class="side">
     <section class="admin" id="adminBox" hidden>
       <label>Project <select id="projSel"></select></label>
+      <p class="hint" id="projFolder"></p>
       <div class="row">
         <button class="btn" id="newProj">New</button>
         <button class="btn" id="copyLink">Copy link</button>
         <a class="btn" id="openLink" target="_blank" rel="noopener">Open</a>
-        <button class="btn danger" id="delProj">Delete</button>
+        <button class="btn danger" id="delProj">Remove</button>
       </div>
-      <label class="drop" id="drop">
-        <input type="file" id="fileIn" accept=".rds" multiple hidden>
-        Drop <b>.rds</b> files here or click.<br>Same name replaces the figure; the link stays the same.
-      </label>
-      <ul class="log" id="upLog"></ul>
+      <p class="hint">Save <b>.rds</b> files straight into the project's Drive folder and press ↻.
+        Saving again under the same name updates the figure; the link stays the same.</p>
+      <p class="hint" id="adminMsg"></p>
     </section>
-    <h2>Figures</h2>
+    <h2 class="figs-head">Figures <button class="icon" id="refresh" title="Check the Drive folder again">↻</button></h2>
     <ul class="figs" id="figList"></ul>
   </aside>
 

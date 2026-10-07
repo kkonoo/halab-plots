@@ -59,18 +59,13 @@ input:disabled { opacity: .5; }
 .figs li.on { background: var(--accent-soft); }
 .figs .name { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 7px 8px; cursor: pointer; overflow-wrap: anywhere; }
 .figs .name small { display: block; color: var(--muted); font-size: 11px; }
-.figs .x { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 6px 8px; }
-.figs .x:hover { color: var(--danger); }
+.figs-head { display: flex; align-items: center; justify-content: space-between; }
+.icon { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 4px; }
+.icon:hover { color: var(--accent); }
 
 .admin { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
 .admin .row { margin-bottom: 10px; }
-.drop {
-  display: block; border: 1.5px dashed var(--line); border-radius: 8px; padding: 14px 10px; text-align: center;
-  cursor: pointer; font-size: 12px; color: var(--muted);
-}
-.drop.over, .drop:hover { border-color: var(--accent); color: var(--text); }
-.log { list-style: none; margin: 8px 0 0; padding: 0; font-size: 12px; color: var(--muted); }
-.log .err { color: var(--danger); }
+.admin .err { color: var(--danger); }
 
 .stage { background: var(--stage); overflow: auto; padding: 28px; }
 .msg { color: var(--muted); margin: 0 0 12px; max-width: 520px; }

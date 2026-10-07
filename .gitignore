@@ -1,5 +1,3 @@
 # Local only
 .claude/
 CLAUDE.md
-# Holds the admin key
-firestore.rules

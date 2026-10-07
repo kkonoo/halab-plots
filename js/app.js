@@ -1,7 +1,7 @@
-// Figure Builder — page logic. Figures come from Firestore (store.js) and are drawn by R in the browser (r-engine.js).
+// Ha Lab Plots — page logic. Figures come from Google Drive through Apps Script (api.js) and are drawn by R in the browser (r-engine.js).
 // The preview box is the exported size: 96 CSS px = 1 inch, and R draws text at its real point size.
-import { firebaseConfig } from './firebase-config.js';
-import * as store from './store.js';
+import { API } from './config.js';
+import * as api from './api.js';
 import * as R from './r-engine.js';
 
 const $ = id => document.getElementById(id);
@@ -26,7 +26,7 @@ const savePrefs = () => keep('prefs', prefs);
 
 const S = { role: null, project: null, projects: [], figs: [], fig: null, info: null, w: 7, h: 5, edits: {} };
 const bytesCache = new Map();
-const figKey = f => `fig.${S.project.id}.${f.id}`;
+const figKey = f => `fig.${S.project.k}.${f.id}`;
 const saveFig = () => S.fig && keep(figKey(S.fig), { w: S.w, h: S.h, edits: S.edits });
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -44,19 +44,18 @@ start();
 
 async function start() {
   const k = new URLSearchParams(location.search).get('k')?.trim();
-  if (!firebaseConfig || !k) return stageMsg('Open this page with the link you were given.');
+  if (!API || !k) return stageMsg('Open this page with the link you were given.');
   let link;
   try {
-    await store.connect();
-    link = await store.openLink(k);
+    link = await api.who(k);
   } catch (e) {
     console.error(e);
     return stageMsg('Could not connect. Please reload the page.');
   }
   S.role = link.role;
-  if (S.role === 'none') return stageMsg('This link is not valid, or the project was deleted.');
+  if (S.role === 'none') return stageMsg('This link is not valid, or the project was removed.');
   if (S.role === 'viewer') {
-    S.project = link.project;
+    S.project = { k, name: link.name };
     return showProject();
   }
   $('adminBox').hidden = $('adminBadge').hidden = false;
@@ -65,47 +64,53 @@ async function start() {
 
 // ---------- projects & figure list ----------
 async function refreshProjects(pick) {
-  S.projects = await store.listProjects();
-  $('projSel').innerHTML = S.projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  const p = S.projects.find(p => p.id === pick) || S.projects[0];
+  S.projects = await api.listProjects();
+  $('projSel').innerHTML = S.projects.map(p => `<option value="${p.k}">${esc(p.name)}</option>`).join('');
+  const p = S.projects.find(p => p.k === pick) || S.projects[0];
   $('copyLink').disabled = $('delProj').disabled = !p;
-  $('openLink').hidden = $('drop').hidden = !p;
+  $('openLink').hidden = !p;
+  $('projFolder').textContent = p ? `Drive folder: ${p.folderName}` : '';
   if (!p) {
     S.project = null; S.figs = []; clearFig(); renderList(); $('projName').textContent = '';
-    return stageMsg('Create a project with “New”.');
+    return stageMsg('Create a project with “New”: a name and the Drive folder that holds its .rds files.');
   }
-  $('projSel').value = p.id;
+  $('projSel').value = p.k;
   S.project = p;
   showProject();
 }
 
 async function showProject() {
   $('projName').textContent = S.project.name;
-  document.title = `${S.project.name} · Figure Builder`;
+  document.title = `${S.project.name} · Ha Lab Plots`;
   if (S.role === 'admin') {
-    keep('lastProject', S.project.id);
+    keep('lastProject', S.project.k);
     $('openLink').href = projectLink();
   }
-  S.figs = await store.listFigures(S.project.id);
+  try {
+    S.figs = await api.listFigures(S.project.k);
+  } catch (e) {
+    S.figs = []; renderList(); clearFig();
+    return stageMsg('Could not read the figures: ' + errText(e));
+  }
   renderList();
-  const f = S.figs.find(f => f.id === load('last.' + S.project.id)) || S.figs[0];
+  const f = S.figs.find(f => f.id === S.fig?.id) || S.figs.find(f => f.id === load('last.' + S.project.k)) || S.figs[0];
   if (f) return selectFig(f);
   clearFig();
-  stageMsg(S.role === 'admin' ? 'Drop .rds files on the left to add figures.' : 'No figures in this project yet.');
+  stageMsg(S.role === 'admin' ? 'No .rds files in this project\'s Drive folder yet. Save some there, then press ↻.' : 'No figures in this project yet.');
 }
+
+const fmtSize = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB';
+const fmtDate = t => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
 function renderList() {
   $('figList').innerHTML = S.figs.map(f => `<li data-id="${f.id}" class="${f.id === S.fig?.id ? 'on' : ''}">
-    <button class="name">${esc(f.name)}<small>${esc(f.kind || '')}${f.rows ? ' · table' : ''}</small></button>
-    ${S.role === 'admin' ? '<button class="x" title="Delete figure">✕</button>' : ''}</li>`).join('');
+    <button class="name">${esc(f.name)}<small>${fmtSize(f.size)} · ${fmtDate(f.updated)}</small></button></li>`).join('');
 }
 
 $('figList').addEventListener('click', e => {
   const li = e.target.closest('li');
   const f = li && S.figs.find(f => f.id === li.dataset.id);
-  if (!f) return;
-  if (e.target.closest('.x')) removeFigure(f);
-  else if (f !== S.fig) selectFig(f);
+  if (f && f !== S.fig) selectFig(f);
 });
 
 function clearFig() {
@@ -117,14 +122,14 @@ function clearFig() {
 
 async function selectFig(f) {
   S.fig = f; S.info = null;
-  keep('last.' + S.project.id, f.id);
+  keep('last.' + S.project.k, f.id);
   const saved = load(figKey(f), {});
   S.w = saved.w || 7; S.h = saved.h || 5; S.edits = saved.edits || {};
   renderList(); sizeUI(); textUI(); exportUI();
   stageMsg(''); $('paper').hidden = false; setImg(null); busy(true, 'Loading…');
   try {
-    const key = f.id + f.ver;
-    if (!bytesCache.has(key)) bytesCache.set(key, await store.getFigureBytes(S.project.id, f));
+    const key = f.id + '@' + f.updated;   // a re-saved file gets a new date → fetched again
+    if (!bytesCache.has(key)) bytesCache.set(key, await api.getFigureBytes(S.project.k, f));
     await rReady;
     if (S.fig !== f) return;
     const info = await R.loadFigure(bytesCache.get(key));
@@ -306,24 +311,29 @@ for (const [id, fmt, type] of [['dlCsv', 'csv', 'text/csv'], ['dlTxt', 'txt', 't
 }
 
 // ---------- admin ----------
-const projectLink = () => `${location.origin}${location.pathname}?k=${S.project.id}`;
+const projectLink = () => `${location.origin}${location.pathname}?k=${S.project.k}`;
+const adminMsg = (t, err) => { $('adminMsg').textContent = t; $('adminMsg').className = 'hint' + (err ? ' err' : ''); };
 
 $('projSel').addEventListener('change', () => refreshProjects($('projSel').value));
 
 $('newProj').addEventListener('click', async () => {
-  const name = prompt('Project name (only you and people with the link see it)')?.trim();
+  const name = prompt('Project name (people with the link see it)')?.trim();
   if (!name) return;
+  const folder = prompt('Drive folder with the .rds files — paste its link, or a path such as\nG:\내 드라이브\HBV\share_plots')?.trim();
+  if (!folder) return;
+  adminMsg('Creating…');
   try {
-    await refreshProjects(await store.createProject(name));
+    await refreshProjects(await api.createProject(name, folder));
+    adminMsg(`“${name}” created. Copy its link and send it.`);
   } catch (e) {
-    alert('Could not create the project: ' + errText(e));
+    adminMsg('Could not create the project: ' + errText(e), true);
   }
 });
 
 $('copyLink').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(projectLink());
-    logLine(`Link copied for “${S.project.name}”.`);
+    adminMsg(`Link copied for “${S.project.name}”.`);
   } catch {
     prompt('Copy this link:', projectLink());
   }
@@ -331,65 +341,15 @@ $('copyLink').addEventListener('click', async () => {
 
 $('delProj').addEventListener('click', async () => {
   const p = S.project;
-  if (!confirm(`Delete “${p.name}” and all its figures? Its link stops working.`)) return;
+  if (!confirm(`Remove “${p.name}”? Its link stops working. The files in Drive are not touched.`)) return;
   try {
-    await store.deleteProject(p.id);
+    await api.removeProject(p.k);
+    adminMsg(`“${p.name}” removed.`);
     await refreshProjects();
   } catch (e) {
-    alert('Could not delete: ' + errText(e));
+    adminMsg('Could not remove: ' + errText(e), true);
   }
 });
 
-async function removeFigure(f) {
-  if (!confirm(`Delete “${f.name}”?`)) return;
-  try {
-    await store.deleteFigure(S.project.id, f);
-  } catch (e) {
-    return alert('Could not delete: ' + errText(e));
-  }
-  S.figs = S.figs.filter(x => x !== f);
-  if (S.fig === f) { S.figs[0] ? selectFig(S.figs[0]) : clearFig(); }
-  renderList();
-}
-
-function logLine(text, err, li = document.createElement('li')) {
-  li.textContent = text;
-  li.className = err ? 'err' : '';
-  if (!li.isConnected) $('upLog').prepend(li);
-  return li;
-}
-
-const drop = $('drop');
-$('fileIn').addEventListener('change', () => { upload([...$('fileIn').files]); $('fileIn').value = ''; });
-drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
-drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); upload([...e.dataTransfer.files]); });
-
-async function upload(files) {
-  if (!S.project) return;
-  const rds = files.filter(f => /\.rds$/i.test(f.name));
-  if (rds.length < files.length) logLine('Only .rds files can be added; others were skipped.', true);
-  if (!rds.length) return;
-  await rReady;
-  let last;
-  for (const file of rds) {
-    const name = file.name.replace(/\.rds$/i, '');
-    if (file.size > 20e6) { logLine(`${name}: larger than 20 MB — not added.`, true); continue; }
-    const li = logLine(`${name}: checking…`);
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const info = await R.checkFigure(bytes);
-      const old = S.figs.find(f => f.name === name);
-      logLine(`${name}: uploading…`, false, li);
-      await store.putFigure(S.project.id, name, bytes, { fmt: 'rds', kind: info.kind, rows: info.rows, cols: info.cols }, old);
-      logLine(`${name}: ${old ? 'replaced' : 'added'} (${info.kind}${info.rows ? ', with table' : ''}).`, false, li);
-      last = name;
-    } catch (e) {
-      logLine(`${name}: ${errText(e)}`, true, li);
-    }
-  }
-  if (!last) return;
-  S.figs = await store.listFigures(S.project.id);
-  renderList();
-  selectFig(S.figs.find(f => f.name === last));
-}
+// New or re-saved files in the Drive folder
+$('refresh').addEventListener('click', () => S.project && showProject());
