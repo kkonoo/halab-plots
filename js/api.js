@@ -3,9 +3,21 @@ import { API } from './config.js';
 
 let key = '';   // this page's ?k= — a project's token, or the admin key
 
+const READS = ['who', 'list', 'file', 'projects'];   // safe to send again; create/remove are not
+
 async function call(a, body = {}) {
-  // a plain-text body keeps this a "simple" request, so Apps Script needs no CORS preflight
-  const r = await fetch(API, { method: 'POST', body: JSON.stringify({ a, k: key, ...body }) });
+  let r;
+  for (let tries = READS.includes(a) ? 2 : 1; ; tries--) {
+    try {
+      // a plain-text body keeps this a "simple" request, so Apps Script needs no CORS preflight
+      r = await fetch(API, { method: 'POST', body: JSON.stringify({ a, k: key, ...body }) });
+      break;
+    } catch (e) {
+      // "Failed to fetch": Apps Script answered with a Google error page instead of our JSON
+      if (tries <= 1) throw new Error(`The server didn't answer “${a}” (${e.message}). Try again in a moment.`);
+      await new Promise(res => setTimeout(res, 1500));
+    }
+  }
   const d = await r.json();
   if (!d.ok) throw new Error(d.error || 'Server error');
   return d;

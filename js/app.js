@@ -76,7 +76,12 @@ async function start() {
     return showProject();
   }
   $('adminBox').hidden = $('adminBadge').hidden = false;
-  await refreshProjects(load('lastProject'));
+  try {
+    await refreshProjects(load('lastProject'));
+  } catch (e) {
+    console.error(e);
+    stageMsg('Could not load the projects: ' + errText(e));
+  }
 }
 
 // ---------- projects & figure list ----------
@@ -510,7 +515,8 @@ for (const [id, fmt, type] of [['dlCsv', 'csv', 'text/csv'], ['dlTxt', 'txt', 't
 const projectLink = () => `${location.origin}${location.pathname}?k=${S.project.k}`;
 const adminMsg = (t, err) => { $('adminMsg').textContent = t; $('adminMsg').className = 'hint' + (err ? ' err' : ''); };
 
-$('projSel').addEventListener('change', () => refreshProjects($('projSel').value));
+$('projSel').addEventListener('change', () =>
+  refreshProjects($('projSel').value).catch(e => stageMsg('Could not load the projects: ' + errText(e))));
 
 $('newProj').addEventListener('click', async () => {
   const name = prompt('Project name (people with the link see it)')?.trim();
