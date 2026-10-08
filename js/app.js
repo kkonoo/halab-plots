@@ -1,8 +1,10 @@
-// HaLab Plots — page logic. Figures come from Google Drive through Apps Script (api.js) and are drawn by R in the browser (r-engine.js).
-// The preview box is the exported size: 96 CSS px = 1 inch, and R draws text at its real point size.
+// HaLab Plots — page logic. Figures come from Google Drive through Apps Script (api.js) and are drawn in the browser:
+// R figures (.rds) by R (r-engine.js), matplotlib figures (.pkl) by Python (py-engine.js).
+// The preview box is the exported size: 96 CSS px = 1 inch, and text is drawn at its real point size.
 import { API } from './config.js';
 import * as api from './api.js';
 import * as R from './r-engine.js';
+import * as PY from './py-engine.js';
 import { initCompose } from './compose.js';
 
 const $ = id => document.getElementById(id);
@@ -30,15 +32,17 @@ const figKey = f => `fig.${S.project.k}.${f.id}`;
 const saveFig = () => S.fig && keep(figKey(S.fig), { w: S.w, h: S.h, edits: S.edits });
 const figEdits = f => (f === S.fig ? S.edits : load(figKey(f), {}).edits) || {};
 
-// Fetches a figure and has R load it (R keeps it, by file id). A re-saved file has a new date → fetched again.
+const engine = f => (f.fmt === 'pkl' ? PY : R);
+
+// Fetches a figure and has R or Python load it (they keep it, by file id). A re-saved file has a new date → fetched again.
 const loading = new Map();
 function ensureLoaded(f) {
   const key = f.id + '@' + f.updated;
   if (!loading.has(key)) {
     const p = (async () => {
       const bytes = await api.getFigureBytes(S.project.k, f);
-      await rReady;
-      return R.loadFigure(bytes, f.id);
+      await rReady;   // R also draws combined pages, Python figures included
+      return engine(f).loadFigure(bytes, f.id);
     })();
     p.catch(() => loading.delete(key));   // let a failed one be tried again
     loading.set(key, p);
@@ -107,7 +111,7 @@ async function refreshProjects(pick) {
   $('projFolder').textContent = p ? `Drive folder: ${p.folderName}` : '';
   if (!p) {
     S.project = null; S.figs = []; clearFig(); renderList(); $('projName').textContent = '';
-    return stageMsg('Create a project with “New”: a name and the Drive folder that holds its .rds files.');
+    return stageMsg('Create a project with “New”: a name and the Drive folder that holds its figure files.');
   }
   $('projSel').value = p.k;
   S.project = p;
@@ -134,7 +138,7 @@ async function showProject() {
   if (S.project !== proj) return;   // another project was picked meanwhile
   try {
     S.figs = figs;
-    S.figs.forEach(f => { f.group ??= ''; });   // older server versions don't send groups
+    S.figs.forEach(f => { f.group ??= ''; f.fmt ??= 'rds'; });   // older server versions send neither
     $('modeSeg').hidden = false;
     renderList();
     compose.projectChanged();
@@ -142,7 +146,7 @@ async function showProject() {
       S.figs.find(f => f.group === groups()[0]);   // the first one as listed
     if (f) return S.mode === 'fig' ? selectFig(f) : (S.fig = f);
     clearFig();
-    stageMsg(S.role === 'admin' ? 'No .rds files in this project\'s Drive folder yet. Save some there, then press ↻.' : 'No figures in this project yet.');
+    stageMsg(S.role === 'admin' ? 'No figure files (.rds, .pkl) in this project\'s Drive folder yet. Save some there, then press ↻.' : 'No figures in this project yet.');
   } catch (e) {
     console.error(e);
     stageMsg('Something went wrong showing the figures: ' + errText(e));
@@ -224,7 +228,8 @@ async function selectFig(f) {
   const saved = load(figKey(f), {});
   S.w = saved.w || 7; S.h = saved.h || 5; S.edits = saved.edits || {};
   renderList(); sizeUI(); styleUI(); textUI(); exportUI();
-  stageMsg(''); $('paper').hidden = false; setImg(null); busy(true, 'Loading…');
+  stageMsg(''); $('paper').hidden = false; setImg(null);
+  busy(true, f.fmt === 'pkl' ? 'Loading… (Python starts with the first Python figure: up to a minute)' : 'Loading…');
   try {
     const info = await ensureLoaded(f);
     if (S.fig !== f) return;
@@ -258,7 +263,7 @@ async function draw() {
   const f = S.fig;
   try {
     const dpi = PX_IN * Math.min(window.devicePixelRatio || 1, 2);
-    const png = await R.drawFigure({ id: f.id, fmt: 'png', w: S.w, h: S.h, dpi, edits: S.edits });
+    const png = await engine(f).drawFigure({ id: f.id, fmt: 'png', w: S.w, h: S.h, dpi, edits: S.edits });
     if (f === S.fig) { setImg(png); stageMsg(''); }
   } catch (e) {
     if (f === S.fig) { setImg(null); stageMsg('Could not draw at this size (too small?): ' + errText(e)); }
@@ -352,7 +357,9 @@ function styleUI() {
   const layers = i.style?.layers || [], scales = Object.entries(i.style?.scales || {});
   if (!layers.length && !scales.length && !i.heat) {
     box.innerHTML = `<p class="hint">${i.kind === 'patchwork' ? 'Combined (patchwork) figures: only size and text.' :
-      i.kind === 'base' ? 'Base R figures: only size and text size.' : 'Nothing to change here for this figure.'}</p>`;
+      i.kind === 'base' ? 'Base R figures: only size and text size.' : i.kind === 'matplotlib' ? 'Python (matplotlib) figures: only size.' :
+      'Nothing to change here for this figure.'}</p>` +
+      (i.saved ? `<p class="hint err">Saved with matplotlib ${esc(i.saved)}, drawn here with ${esc(i.mpl)}: check it against the original.</p>` : '');
     return;
   }
   const e = S.edits;
@@ -436,8 +443,9 @@ $('styleBox').addEventListener('click', e => {
 function textUI() {
   const i = S.info, box = $('textBox');
   if (!i) { box.innerHTML = '<p class="hint">—</p>'; return; }
-  if (['pheatmap', 'grob', 'complexheatmap'].includes(i.kind)) {
-    box.innerHTML = `<p class="hint">Text can't be changed here for ${i.kind === 'complexheatmap' ? 'ComplexHeatmap' : i.kind} figures — only the size. Ask us for text changes.</p>`;
+  if (['pheatmap', 'grob', 'complexheatmap', 'matplotlib'].includes(i.kind)) {
+    const name = { complexheatmap: 'ComplexHeatmap', matplotlib: 'Python (matplotlib)' }[i.kind] || i.kind;
+    box.innerHTML = `<p class="hint">Text can't be changed here for ${name} figures — only the size. Ask us for text changes.</p>`;
     return;
   }
   if (i.kind === 'base' && i.size === undefined) {   // the function sets its own par(ps =)
@@ -513,7 +521,7 @@ $('dlFig').addEventListener('click', async () => {
   const btn = $('dlFig');
   btn.disabled = true; btn.textContent = 'Preparing…';
   try {
-    saveFile(await R.drawFigure({ id: S.fig.id, fmt, w: S.w, h: S.h, dpi, edits: S.edits }), name, MIME[fmt]);
+    saveFile(await engine(S.fig).drawFigure({ id: S.fig.id, fmt, w: S.w, h: S.h, dpi, edits: S.edits }), name, MIME[fmt]);
   } catch (e) {
     alert('Could not make the file: ' + errText(e));
   }
@@ -523,7 +531,7 @@ $('dlFig').addEventListener('click', async () => {
 for (const [id, fmt, type] of [['dlCsv', 'csv', 'text/csv'], ['dlTxt', 'txt', 'text/plain']]) {
   $(id).addEventListener('click', async () => {
     try {
-      saveFile(await R.tableFile(S.fig.id, fmt), `${fileBase()}_data.${fmt}`, type);
+      saveFile(await engine(S.fig).tableFile(S.fig.id, fmt), `${fileBase()}_data.${fmt}`, type);
     } catch (e) {
       alert('Could not make the table: ' + errText(e));
     }
@@ -540,7 +548,7 @@ $('projSel').addEventListener('change', () =>
 $('newProj').addEventListener('click', async () => {
   const name = prompt('Project name (people with the link see it)')?.trim();
   if (!name) return;
-  const folder = prompt('Drive folder with the .rds files — paste its link, or a path such as\nG:\내 드라이브\HBV\share_plots')?.trim();
+  const folder = prompt('Drive folder with the figure files (.rds, .pkl) — paste its link, or a path such as\nG:\내 드라이브\HBV\share_plots')?.trim();
   if (!folder) return;
   adminMsg('Creating…');
   try {
@@ -578,7 +586,7 @@ $('refresh').addEventListener('click', () => S.project && showProject());
 // ---------- compose (js/compose.js) ----------
 const compose = initCompose({
   $, R, PX_IN, UNITS, SNAP, MIME, EXT, MAX_PIXELS, num, esc, errText, load, keep, prefs, savePrefs, saveFile,
-  ensureLoaded, figEdits, groups,
+  ensureLoaded, figEdits, groups, engine,
   project: () => S.project,
   figs: () => S.figs,
   editFigure: f => { S.fig = f; setMode('fig'); },

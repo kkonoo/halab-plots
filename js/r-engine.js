@@ -1,5 +1,5 @@
 // R in the browser (webR): start-up, fonts, and calls into r/figure.R.
-// Figures with fmt 'rds' are drawn here; another engine (e.g. Pyodide for matplotlib) could sit next to this one.
+// Figures with fmt 'rds' are drawn here; matplotlib figures (.pkl) by Python (py-engine.js). R also draws combined pages.
 
 const WEBR = 'https://webr.r-wasm.org/v0.6.0/webr.mjs';
 const PKGS = ['ggplot2', 'ragg', 'svglite', 'pheatmap', 'ggrepel', 'patchwork', 'jsonlite'];
@@ -48,21 +48,30 @@ ${['mono', 'monospace', 'Courier'].map(f => alias(f, 'Noto Sans Mono')).join('')
 </fontconfig>`;
 }
 
+// Arimo and the viewer's own Arial (if allowed): { files: [{ name, bytes }], main: 'Arial' | 'Arimo' }.
+// Python (py-engine.js) draws with the same fonts.
+let fonts;
+export const fontFiles = () => fonts ??= (async () => {
+  const own = await localArial(false);
+  const bytes = async r => new Uint8Array(await r.arrayBuffer());
+  const files = await Promise.all([
+    ...FONTS.map(async f => ({ name: f.split('/')[1], bytes: await bytes(await fetch(FONT_CDN + f)) })),
+    ...own.map(async f => ({ name: ARIAL[f.postscriptName], bytes: await bytes(await f.blob()) }))]);
+  return { files, main: own.some(f => f.postscriptName === 'ArialMT') ? 'Arial' : 'Arimo' };
+})();
+
 // → the font plots are drawn in: 'Arial' (the viewer's own, already allowed) or 'Arimo'
 export async function startR() {
   const { WebR } = await import(WEBR);
-  const arial = localArial(false);
+  const fetching = fontFiles();
   webR = new WebR();
   await webR.init();
   await webR.FS.mkdir(FONT_DIR);
-  const fonts = Promise.all(FONTS.map(async f =>
-    put(`${FONT_DIR}/${f.split('/')[1]}`, new Uint8Array(await (await fetch(FONT_CDN + f)).arrayBuffer()))));
-  const own = await arial;   // fontconfig reads its fonts once, so they must all be in place before the first plot
-  await Promise.all(own.map(async f => put(`${FONT_DIR}/${ARIAL[f.postscriptName]}`, new Uint8Array(await (await f.blob()).arrayBuffer()))));
-  const main = own.some(f => f.postscriptName === 'ArialMT') ? 'Arial' : 'Arimo';
+  const { files, main } = await fetching;   // fontconfig reads its fonts once, so they must all be in place before the first plot
   const code = fetch('r/figure.R').then(r => r.text());
+  await Promise.all(files.map(f => put(`${FONT_DIR}/${f.name}`, f.bytes)));
   await put('/etc/fonts/fonts.conf', enc(fontConfig(main)));   // before anything draws text
-  await Promise.all([fonts, webR.installPackages(PKGS, { quiet: true })]);
+  await webR.installPackages(PKGS, { quiet: true });
   await put('/tmp/figure.R', enc(await code));
   await webR.evalRVoid('source("/tmp/figure.R")');
   return main;
@@ -82,11 +91,17 @@ export const drawFigure = o => run(async () => {
   return webR.FS.readFile(path);
 });
 
-// o = { fmt, w, h, dpi, panels: [{ id, x, y, w, h, edits, letter }], letters: { size, bold } } (inches) → file bytes
+// o = { fmt, w, h, dpi, panels: [{ id, x, y, w, h, edits, letter }], letters: { size, bold } } (inches) → file bytes.
+// A panel drawn elsewhere (Python) comes as { png: <bytes>, x, y, w, h, letter } instead of id and edits.
 export const drawPage = o => run(async () => {
   const path = `/tmp/page.${o.fmt}`;
+  const panels = await Promise.all(o.panels.map(async ({ png, ...pn }, i) => {
+    if (!png) return pn;
+    await put(`/tmp/panel${i}.png`, png);
+    return { ...pn, img: `/tmp/panel${i}.png` };
+  }));
   await webR.evalRVoid('fb_page(path, fmt, w, h, dpi, spec)',
-    { env: { path, fmt: o.fmt, w: o.w, h: o.h, dpi: o.dpi, spec: JSON.stringify({ panels: o.panels, letters: o.letters }) } });
+    { env: { path, fmt: o.fmt, w: o.w, h: o.h, dpi: o.dpi, spec: JSON.stringify({ panels, letters: o.letters }) } });
   return webR.FS.readFile(path);
 });
 

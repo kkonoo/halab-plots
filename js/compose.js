@@ -1,6 +1,7 @@
 // Compose: several figures on one page (a combined figure). One page per group (Drive subfolder), kept in this browser.
 // Panels are in inches from the page's top left; the preview is 96 CSS px per inch, like a single figure.
-// Each panel uses its figure's own Style/Text settings; R draws the whole page for the download (fb_page).
+// Each panel uses its figure's own Style/Text settings; R draws the whole page for the download (fb_page),
+// with Python (matplotlib) panels placed as pictures.
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const MIN_PANEL = 0.4, MAX_PAGE = 20;   // inches
@@ -73,7 +74,7 @@ export function initCompose(ctx) {
     n?.classList.add('drawing');
     try {
       await ctx.ensureLoaded(f);
-      const png = await R.drawFigure({ id: f.id, fmt: 'png', w: pn.w, h: pn.h, dpi: PX_IN * Math.min(window.devicePixelRatio || 1, 2), edits });
+      const png = await ctx.engine(f).drawFigure({ id: f.id, fmt: 'png', w: pn.w, h: pn.h, dpi: PX_IN * Math.min(window.devicePixelRatio || 1, 2), edits });
       if (drawn.get(pn.uid) !== want || !n?.isConnected) return;   // changed again meanwhile
       if (urls.has(pn.uid)) URL.revokeObjectURL(urls.get(pn.uid));
       urls.set(pn.uid, URL.createObjectURL(new Blob([png], { type: 'image/png' })));
@@ -301,7 +302,10 @@ export function initCompose(ctx) {
         const f = figOf(pn);
         if (!f) continue;
         await ctx.ensureLoaded(f);
-        panels.push({ id: f.id, x: pn.x, y: pn.y, w: pn.w, h: pn.h, edits: ctx.figEdits(f), letter: page.letters.show && pn.letter ? shownLetter(pn.letter) : '' });
+        const p = { id: f.id, x: pn.x, y: pn.y, w: pn.w, h: pn.h, edits: ctx.figEdits(f), letter: page.letters.show && pn.letter ? shownLetter(pn.letter) : '' };
+        // R draws the page, so a Python figure goes in as a picture: at the file's DPI, or 600 DPI in a PDF / SVG
+        if (f.fmt === 'pkl') p.png = await ctx.engine(f).drawFigure({ id: f.id, fmt: 'png', w: pn.w, h: pn.h, dpi: raster ? dpi : 600 });
+        panels.push(p);
       }
       const bytes = await R.drawPage({ fmt, w: page.w, h: page.h, dpi, panels, letters: { size: page.letters.size, bold: page.letters.bold } });
       const u = prefs.unit, base = `${ctx.project().name}${group ? '_' + group : ''}`.replace(/[\\/:*?"<>|]+/g, '_');

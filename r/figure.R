@@ -272,8 +272,8 @@ fb_try <- function(f) {
 fb_echo <- function(f, size) {
   w <- grid::convertWidth(grid::unit(1, "npc"), "in", valueOnly = TRUE)
   h <- grid::convertHeight(grid::unit(1, "npc"), "in", valueOnly = TRUE)
-  dev <- function(w, h) {
-    grDevices::pdf(NULL, width = w, height = h, pointsize = size)
+  dev <- function(w, h) {   # white like the file devices: legend() fills its box with par("bg")
+    grDevices::pdf(NULL, width = w, height = h, pointsize = size, bg = "white")
     grDevices::dev.control("enable")
   }
   cur <- grDevices::dev.cur()
@@ -293,7 +293,9 @@ fb_echo <- function(f, size) {
     grid::pushViewport(grid::viewport(gp = grid::gpar(fontsize = rec$ps)))
     gridGraphics::grid.echo(rec$plot, newpage = FALSE, prefix = paste0("fb", fb$echoes, "-"), device = dev)
   }, width = w, height = h, device = dev)
+  grid::pushViewport(grid::viewport(clip = "on"))   # its background is painted 1.5 times the figure's size
   grid::grid.draw(g)
+  grid::popViewport()
 }
 
 # Draws into the current grid viewport (a whole page, or one panel of a combined figure)
@@ -327,14 +329,17 @@ fb_save <- function(path, fmt, w, h, dpi, edits, id) {
 
 # A combined figure. spec: list(panels = list(list(id, x, y, w, h (inches from the top left), edits, letter)),
 #                              letters = list(size = <pt>, bold = TRUE/FALSE))
+# A panel drawn by Python comes as list(img = <PNG file>, x, y, w, h, letter) and is placed as a picture.
 fb_page <- function(path, fmt, w, h, dpi, spec) {
   s <- jsonlite::fromJSON(spec, simplifyVector = FALSE)
+  if (any(vapply(s$panels, function(pn) !is.null(pn$img), TRUE))) fb_need("png")
   fb_device(path, fmt, w, h, dpi)
   on.exit(grDevices::dev.off())
   u <- function(v) grid::unit(v, "in")
   for (pn in s$panels) {
     grid::pushViewport(grid::viewport(x = u(pn$x), y = u(h - pn$y), width = u(pn$w), height = u(pn$h), just = c("left", "top")))
-    fb_draw(fb_get(pn$id), pn$edits)
+    if (is.null(pn$img)) fb_draw(fb_get(pn$id), pn$edits) else   # native: 4 bytes a pixel instead of 32
+      grid::grid.raster(png::readPNG(pn$img, native = TRUE), width = grid::unit(1, "npc"), height = grid::unit(1, "npc"), interpolate = FALSE)
     grid::popViewport()
   }
   for (pn in s$panels) if (nzchar(pn$letter %||% ""))   # letters last, so no panel covers them

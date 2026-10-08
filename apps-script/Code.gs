@@ -1,7 +1,7 @@
 /**
- * halab-plots — Drive에 있는 그림(.rds)을 프로젝트 링크로 보여주는 서버 (Google Apps Script)
+ * halab-plots — Drive에 있는 그림(R .rds, Python .pkl)을 프로젝트 링크로 보여주는 서버 (Google Apps Script)
  * 페이지(https://kkonoo.github.io/halab-plots/)가 이 웹 앱에 POST로 묻는다. 파일은 Drive에 비공개 그대로 둔다.
- * 프로젝트 = Drive 폴더 하나. 그 폴더와 바로 아래 하위 폴더(= 묶음, 예: Fig1·Fig2)의 .rds가 보인다. 그보다 깊은 폴더는 안 봄.
+ * 프로젝트 = Drive 폴더 하나. 그 폴더와 바로 아래 하위 폴더(= 묶음, 예: Fig1·Fig2)의 그림 파일이 보인다. 그보다 깊은 폴더는 안 봄.
  * 링크 토큰·폴더·관리자 토큰은 이 스크립트의 속성(프로젝트 설정 → 스크립트 속성)에만 있다 → 코드는 공개해도 됨.
  *
  * 처음 한 번: 위 함수 목록에서 setup → 실행 → 권한 허용 → 실행 로그에 관리자 링크
@@ -10,7 +10,8 @@
  */
 const SITE = 'https://kkonoo.github.io/halab-plots/';
 const MAX_MB = 30;
-const VERSION = '2026-10-07 groups';   // shown at the /exec address — tells which code is deployed
+const VERSION = '2026-10-08 pkl';   // shown at the /exec address — tells which code is deployed
+const FIG = /\.(rds|pkl)$/i;        // R figures (.rds) and Python matplotlib figures (.pkl)
 
 function setup() {
   const p = PropertiesService.getScriptProperties();
@@ -42,7 +43,7 @@ function doPost(e) {
         const p = admin ? project_(props, String(d.p || '')) : proj;
         if (!p) return deny_();
         const f = DriveApp.getFileById(String(d.id));
-        if (!/\.rds$/i.test(f.getName()) || f.isTrashed() || !inProject_(f, p.folder)) return deny_();
+        if (!FIG.test(f.getName()) || f.isTrashed() || !inProject_(f, p.folder)) return deny_();
         if (f.getSize() > MAX_MB * 1048576) return out_({ ok: false, error: 'larger than ' + MAX_MB + ' MB' });
         return out_({ ok: true, data: Utilities.base64Encode(f.getBlob().getBytes()), updated: f.getLastUpdated().getTime() });
       }
@@ -83,15 +84,16 @@ function project_(props, k) {
   return v ? JSON.parse(v) : null;
 }
 
-// group = 하위 폴더 이름('' = 프로젝트 폴더에 바로 있는 파일)
+// group = 하위 폴더 이름('' = 프로젝트 폴더에 바로 있는 파일), fmt = 'rds' | 'pkl'
 function list_(p) {
   const root = DriveApp.getFolderById(p.folder), figs = [];
   const add = (folder, group) => {
     const it = folder.getFiles();
     while (it.hasNext()) {
       const f = it.next(), n = f.getName();
-      if (!/\.rds$/i.test(n) || f.isTrashed()) continue;
-      figs.push({ id: f.getId(), name: n.replace(/\.rds$/i, ''), size: f.getSize(), updated: f.getLastUpdated().getTime(), group: group });
+      if (!FIG.test(n) || f.isTrashed()) continue;
+      figs.push({ id: f.getId(), name: n.replace(FIG, ''), fmt: n.slice(-3).toLowerCase(), size: f.getSize(),
+        updated: f.getLastUpdated().getTime(), group: group });
     }
   };
   add(root, '');
