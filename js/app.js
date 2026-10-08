@@ -351,7 +351,8 @@ function styleUI() {
   if (!i) { box.innerHTML = '<p class="hint">—</p>'; return; }
   const layers = i.style?.layers || [], scales = Object.entries(i.style?.scales || {});
   if (!layers.length && !scales.length && !i.heat) {
-    box.innerHTML = `<p class="hint">${i.kind === 'patchwork' ? 'Combined (patchwork) figures: only size and text.' : 'Nothing to change here for this figure.'}</p>`;
+    box.innerHTML = `<p class="hint">${i.kind === 'patchwork' ? 'Combined (patchwork) figures: only size and text.' :
+      i.kind === 'base' ? 'Base R figures: only size and text size.' : 'Nothing to change here for this figure.'}</p>`;
     return;
   }
   const e = S.edits;
@@ -435,8 +436,12 @@ $('styleBox').addEventListener('click', e => {
 function textUI() {
   const i = S.info, box = $('textBox');
   if (!i) { box.innerHTML = '<p class="hint">—</p>'; return; }
-  if (i.kind === 'pheatmap' || i.kind === 'grob') {
-    box.innerHTML = `<p class="hint">Text can't be changed here for ${i.kind} figures — only the size. Ask us for text changes.</p>`;
+  if (['pheatmap', 'grob', 'complexheatmap'].includes(i.kind)) {
+    box.innerHTML = `<p class="hint">Text can't be changed here for ${i.kind === 'complexheatmap' ? 'ComplexHeatmap' : i.kind} figures — only the size. Ask us for text changes.</p>`;
+    return;
+  }
+  if (i.kind === 'base' && i.size === undefined) {   // the function sets its own par(ps =)
+    box.innerHTML = '<p class="hint">This figure sets its own text size, and its labels can\'t be changed here. Ask us for text changes.</p>';
     return;
   }
   const size = S.edits.size ?? i.size;
@@ -446,9 +451,10 @@ function textUI() {
     html += keys.map(k => `<label>${LABELS[k]}<input type="text" data-lab="${k}" value="${esc(S.edits.labels?.[k] ?? i.labels[k] ?? '')}"></label>`).join('');
     html += '<p class="hint">Leave a box empty to remove that label.</p>';
   } else {
-    html += '<p class="hint">Labels of combined (patchwork) figures can\'t be changed here.</p>';
+    html += `<p class="hint">Labels of ${i.kind === 'base' ? 'base R' : 'combined (patchwork)'} figures can't be changed here.</p>`;
   }
-  html += '<p class="hint">Point and in-plot label sizes are under Style.</p><button class="btn" id="resetText">Reset text</button>';
+  if (i.kind !== 'base') html += '<p class="hint">Point and in-plot label sizes are under Style.</p>';
+  html += '<button class="btn" id="resetText">Reset text</button>';
   box.innerHTML = html;
 }
 

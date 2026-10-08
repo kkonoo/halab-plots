@@ -1,13 +1,20 @@
 # HaLab Plots — R side. Runs inside webR in the browser; js/r-engine.js calls these functions.
-# A figure file is a saveRDS() of a ggplot / patchwork / pheatmap / grid grob,
+# A figure file is a saveRDS() of a ggplot / patchwork / pheatmap / ComplexHeatmap (Heatmap or HeatmapList) / grid grob,
 # or of list(plot = <one of those>, table = <data frame or matrix>) to attach a data table.
+# Base R graphics (plot(), corrplot, …) can't be saved as an object, so they come as the drawing function and its data:
+# list(plot = function(d) corrplot::corrplot(d), data = <its argument>, table = <optional; default: data>).
 
-fb <- new.env()   # figures loaded so far: fb$figs[[id]] = list(plot, table, kind, built)
+fb <- new.env()   # figures loaded so far: fb$figs[[id]] = list(plot, table, kind, data, built)
 fb$figs <- list()
 fb_get <- function(id) fb$figs[[id]] %||% stop("This figure isn't loaded yet.")
 
 # Drawing a gtable (pheatmap's figure) needs gtable's methods, and readRDS alone doesn't load the package
 loadNamespace("gtable")
+
+fb_need <- function(pkgs, repos = NULL) {
+  miss <- Filter(function(p) !nzchar(system.file(package = p)), unique(pkgs))
+  if (length(miss)) try(webr::install(miss, repos = repos, quiet = TRUE), silent = TRUE)
+}
 
 # readRDS, installing any package the object refers to that webR doesn't have yet (e.g. cowplot)
 fb_read <- function(path) {
@@ -19,6 +26,14 @@ fb_read <- function(path) {
       invokeRestart("muffleWarning")
     }
   })
+  # A ComplexHeatmap holds functions from its packages (circlize colour scales) that come back whole only when those
+  # packages are loaded before reading. Bioconductor isn't in webR's own repository; r-universe builds it for webR.
+  x <- if (identical(class(obj), "list")) obj$plot else obj
+  if (isS4(x) && identical(attr(class(x), "package"), "ComplexHeatmap")) {
+    fb_need("ComplexHeatmap", c("https://bioc.r-universe.dev", "https://repo.r-wasm.org"))
+    loadNamespace("ComplexHeatmap")
+    return(suppressWarnings(readRDS(path)))
+  }
   if (length(miss)) {
     try(webr::install(unique(miss), quiet = TRUE), silent = TRUE)
     obj <- suppressWarnings(readRDS(path))
@@ -27,28 +42,42 @@ fb_read <- function(path) {
 }
 
 fb_unwrap <- function(x) {
-  table <- NULL
+  table <- data <- NULL
   if (is.list(x) && !inherits(x, c("gg", "grob", "pheatmap")) && !is.null(x$plot)) {
     table <- x$table
+    data <- x$data
     x <- x$plot
   }
   kind <- if (inherits(x, "pheatmap")) "pheatmap" else if (inherits(x, "patchwork")) "patchwork" else
-    if (inherits(x, "ggplot")) "ggplot" else if (inherits(x, "grob")) "grob" else
-    stop("Not a ggplot, patchwork, pheatmap or grid grob object.")
+    if (inherits(x, "ggplot")) "ggplot" else if (inherits(x, "grob")) "grob" else if (is.function(x)) "base" else
+    if (inherits(x, c("Heatmap", "HeatmapList"))) "complexheatmap" else
+    stop("Not a ggplot, patchwork, pheatmap, ComplexHeatmap, grid grob or plotting function.")
   if (kind == "pheatmap") x <- x$gtable
-  # a ggplot carries its own data; pheatmap and patchwork need list(plot =, table =)
+  # a ggplot carries its own data, a base R figure its function's data, a ComplexHeatmap its (first) matrix;
+  # pheatmap and patchwork need list(plot =, table =)
   if (is.null(table) && kind == "ggplot" && is.data.frame(x$data)) table <- x$data
+  if (is.null(table) && kind == "base" && (is.data.frame(data) || is.matrix(data))) table <- data
+  if (is.null(table) && kind == "complexheatmap") {
+    h <- if (inherits(x, "Heatmap")) x else Find(function(h) inherits(h, "Heatmap"), x@ht_list)
+    if (!is.null(h)) table <- h@matrix
+  }
   if (!is.null(table)) table <- as.data.frame(table)
   if (!is.null(table) && !nrow(table)) table <- NULL
-  list(plot = x, table = table, kind = kind)
+  list(plot = x, table = table, kind = kind, data = data)
 }
 
 fb_load <- function(path, id) {
   f <- fb_unwrap(fb_read(path))
   if (f$kind == "ggplot") f$built <- ggplot2::ggplot_build(f$plot)
+  if (f$kind == "base") {
+    fb_need(c("gridGraphics", fb_pkgs(f$plot)))
+    ps <- fb_try(f)
+  }
   fb$figs[[id]] <- f
   info <- list(kind = f$kind, rows = 0L, cols = 0L)
   if (!is.null(f$table)) info[c("rows", "cols")] <- dim(f$table)
+  # base R draws text at the device's point size (12) unless the function sets its own par(ps =)
+  if (f$kind == "base" && ps == 12) info$size <- 12
   if (f$kind %in% c("ggplot", "patchwork")) {
     size <- tryCatch(ggplot2::calc_element("text", ggplot2::complete_theme(f$plot$theme))$size, error = function(e) NULL)
     if (is.numeric(size)) info$size <- size
@@ -202,6 +231,7 @@ fb_heat <- function(g, h) {
 fb_edit <- function(f, e) {
   p <- f$plot
   if (f$kind == "pheatmap") return(if (is.null(e$heat)) p else fb_heat(p, e$heat))
+  if (f$kind == "complexheatmap") return(p)
   if (f$kind == "ggplot") {
     # settings are kept per figure in the browser; after the file is re-saved a layer or scale may be gone
     for (i in names(e$layers)) if (as.integer(i) <= length(p$layers)) p <- fb_layer(p, as.integer(i), e$layers[[i]])
@@ -215,11 +245,64 @@ fb_edit <- function(f, e) {
   p
 }
 
+# ---------- base R ----------
+# Packages the saved function calls as pkg::fun. (A function saved from a script doesn't bring library() along.)
+fb_pkgs <- function(fn) {
+  n <- all.names(body(fn))
+  unique(n[which(n %in% c("::", ":::")) + 1])
+}
+
+fb_call <- function(f) if (is.null(f$data)) f$plot() else f$plot(f$data)
+
+# Runs the function once off screen, so a broken file says why when it is opened. → the point size it ended with
+fb_try <- function(f) {
+  grDevices::pdf(NULL, 7, 5, pointsize = 12)
+  on.exit(grDevices::dev.off())
+  tryCatch(fb_call(f), error = function(e) {
+    m <- conditionMessage(e)
+    stop(m, if (grepl("could not find function", m)) " — write it as package::function inside the saved function" else
+      if (grepl("not found", m)) " — the saved function can only use its argument (the data saved with it)", call. = FALSE)
+  })
+  graphics::par("ps")
+}
+
+# Base graphics can't draw into a grid viewport, so the function draws on an off-screen device of the viewport's size
+# and gridGraphics redraws that with grid. gridGraphics takes text size from the viewport, not from par("ps"),
+# so the off-screen devices and the viewport get the same point size (then it matches drawing straight to a file).
+fb_echo <- function(f, size) {
+  w <- grid::convertWidth(grid::unit(1, "npc"), "in", valueOnly = TRUE)
+  h <- grid::convertHeight(grid::unit(1, "npc"), "in", valueOnly = TRUE)
+  dev <- function(w, h) {
+    grDevices::pdf(NULL, width = w, height = h, pointsize = size)
+    grDevices::dev.control("enable")
+  }
+  cur <- grDevices::dev.cur()
+  dev(w, h)
+  rec <- tryCatch({
+    fb_call(f)
+    list(plot = grDevices::recordPlot(), ps = graphics::par("ps"))
+  }, finally = {
+    grDevices::dev.off()
+    grDevices::dev.set(cur)
+  })
+  # gridGraphics places axes in device inches, right only when the figure starts at the device's corner (not so for
+  # a panel of a combined figure): redraw on a device of the figure's size, keep what was drawn, and draw that here.
+  # Its viewports are found by name, so each echo gets its own.
+  fb$echoes <- (fb$echoes %||% 0) + 1
+  g <- grid::grid.grabExpr({
+    grid::pushViewport(grid::viewport(gp = grid::gpar(fontsize = rec$ps)))
+    gridGraphics::grid.echo(rec$plot, newpage = FALSE, prefix = paste0("fb", fb$echoes, "-"), device = dev)
+  }, width = w, height = h, device = dev)
+  grid::grid.draw(g)
+}
+
 # Draws into the current grid viewport (a whole page, or one panel of a combined figure)
 fb_draw <- function(f, e) {
-  p <- fb_edit(f, e)
+  p <- if (f$kind != "base") fb_edit(f, e)
   set.seed(1)   # ggrepel places labels at random; a fixed seed keeps the preview and the file alike
-  if (f$kind %in% c("ggplot", "patchwork")) print(p, newpage = FALSE) else grid::grid.draw(p)
+  if (f$kind == "base") fb_echo(f, e$size %||% 12) else
+    if (f$kind %in% c("ggplot", "patchwork")) print(p, newpage = FALSE) else
+    if (f$kind == "complexheatmap") ComplexHeatmap::draw(p, newpage = FALSE) else grid::grid.draw(p)
 }
 
 # w, h in inches; dpi only matters for raster formats
