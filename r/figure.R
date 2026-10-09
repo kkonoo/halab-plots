@@ -90,6 +90,14 @@ fb_load <- function(path, id) {
     info$labels <- Filter(function(v) is.character(v) && length(v) == 1, labs)
     info$style <- fb_style(f$plot, f$built)
   }
+  if (f$kind %in% c("ggplot", "patchwork") && !is.null(info$size)) {
+    axes <- c("axis_title_x", "axis_title_y", "axis_text_x", "axis_text_y")
+    kinds <- if (f$kind == "patchwork") c(axes, "legend_title", "legend_text", "strip") else
+      c(intersect(c("title", "subtitle", "caption"), names(info$labels)), axes,
+        if (f$built$plot$scales$non_position_scales()$n() > 0) c("legend_title", "legend_text"),
+        if (!inherits(f$plot$facet, "FacetNull")) "strip")
+    info$text <- fb_text_info(f$plot$theme, kinds, info$size)
+  }
   if (f$kind == "pheatmap") {
     pal <- fb_heat_palette(f$plot)
     if (length(pal)) info$heat <- lapply(list(low = 1, mid = ceiling(length(pal) / 2), high = length(pal)), function(i) fb_hex(pal[i]))
@@ -104,18 +112,69 @@ FB_GEOMS <- list(
   GeomBar        = list("Bars", c("width", "alpha", "fill")),          # also geom_col, geom_histogram
   GeomBoxplot    = list("Boxes", c("width", "alpha", "fill")),
   GeomViolin     = list("Violins", c("width", "alpha", "fill")),
-  GeomErrorbar   = list("Error bars", c("width", "linewidth", "colour")),
-  GeomTextRepel  = list("Text labels", c("size_pt", "colour")),
-  GeomLabelRepel = list("Text labels", c("size_pt", "colour")),
-  GeomText       = list("Text labels", c("size_pt", "colour")),
-  GeomLabel      = list("Text labels", c("size_pt", "colour")),
-  GeomSmooth     = list("Trend line", c("linewidth", "colour")),
-  GeomVline      = list("Reference line", c("linewidth", "colour")),
-  GeomHline      = list("Reference line", c("linewidth", "colour")),
-  GeomAbline     = list("Reference line", c("linewidth", "colour")),
-  GeomPath       = list("Lines", c("linewidth", "alpha", "colour")),   # also geom_line, geom_step
-  GeomRibbon     = list("Areas", c("alpha", "fill"))                   # also geom_area, geom_density
+  GeomDotplot    = list("Dots", c("dotsize", "alpha", "fill")),
+  GeomErrorbar   = list("Error bars", c("width", "linewidth", "colour", "linetype")),
+  GeomTextRepel  = list("Text labels", c("show", "size_pt", "colour")),
+  GeomLabelRepel = list("Text labels", c("show", "size_pt", "colour")),
+  GeomText       = list("Text labels", c("show", "size_pt", "colour")),
+  GeomLabel      = list("Text labels", c("show", "size_pt", "colour")),
+  GeomSmooth     = list("Trend line", c("linewidth", "colour", "linetype")),
+  GeomVline      = list("Reference line", c("linewidth", "colour", "linetype")),
+  GeomHline      = list("Reference line", c("linewidth", "colour", "linetype")),
+  GeomAbline     = list("Reference line", c("linewidth", "colour", "linetype")),
+  GeomSegment    = list("Segments", c("linewidth", "colour", "linetype")),        # also geom_curve
+  GeomPath       = list("Lines", c("linewidth", "alpha", "colour", "linetype")),  # also geom_line, geom_step
+  GeomRibbon     = list("Areas", c("alpha", "fill"))                              # also geom_area, geom_density
 )
+
+# Text parts that can be resized or turned off → the theme elements they set: every one the text can be drawn
+# with, so a setting the figure made for one of them doesn't win. The first is the one whose size is shown.
+FB_TEXT <- list(
+  title = "plot.title", subtitle = "plot.subtitle", caption = "plot.caption",
+  axis_title_x = c("axis.title.x.bottom", "axis.title.x", "axis.title.x.top"),
+  axis_title_y = c("axis.title.y.left", "axis.title.y", "axis.title.y.right"),
+  axis_text_x = c("axis.text.x.bottom", "axis.text.x", "axis.text.x.top"),
+  axis_text_y = c("axis.text.y.left", "axis.text.y", "axis.text.y.right"),
+  legend_title = "legend.title", legend_text = "legend.text",
+  strip = c("strip.text.x.top", "strip.text.x", "strip.text.x.bottom", "strip.text.y.right", "strip.text.y", "strip.text.y.left")
+)
+fb_text_els <- function(k) intersect(FB_TEXT[[k]], names(ggplot2::get_element_tree()))
+fb_theme <- function(els, el) do.call(ggplot2::theme, stats::setNames(rep(list(el), length(els)), els))
+
+# Per text part: the size (pt) it is drawn at (or would be, turned on), whether that follows the base font size
+# (sizes set with rel()), and whether it is shown
+fb_text_info <- function(th, kinds, base) {
+  size_at <- function(el, b) {
+    t <- th + ggplot2::theme(text = ggplot2::element_text(size = b))
+    e <- ggplot2::calc_element(el, ggplot2::complete_theme(t))
+    if (!inherits(e, "element_text")) e <- ggplot2::calc_element(el, ggplot2::complete_theme(t + fb_theme(el, ggplot2::element_text())))
+    e$size
+  }
+  out <- list()
+  for (k in kinds) {
+    el <- fb_text_els(k)[1]
+    s <- tryCatch(c(size_at(el, base), size_at(el, 2 * base)), error = function(e) NULL)
+    if (length(s) != 2) next
+    out[[k]] <- list(size = round(s[1], 2), rel = isTRUE(all.equal(s[2], 2 * s[1])),
+                     show = inherits(ggplot2::calc_element(el, ggplot2::complete_theme(th)), "element_text"))
+  }
+  out
+}
+
+fb_lty <- function(v) if (is.numeric(v)) c("blank", "solid", "dashed", "dotted", "dotdash", "longdash", "twodash")[v + 1] else as.character(v)
+
+# A continuous size scale's palette (scale_size, scale_radius) keeps its size range in its environment.
+# Taken from a built plot it comes wrapped as a ggproto method, maybe more than once.
+fb_pal <- function(s) {
+  f <- s$palette
+  while (inherits(f, "ggproto_method")) f <- environment(f)$f
+  f
+}
+fb_pal_range <- function(s) {
+  e <- environment(fb_pal(s))
+  r <- if (is.environment(e)) get0("range", e, inherits = FALSE)
+  if (is.numeric(r) && length(r) == 2) r
+}
 
 fb_hex <- function(x) {
   x <- x[!is.na(x)]
@@ -139,8 +198,17 @@ fb_style <- function(p, b) {
         params$width <- l$geom_params$width %||% l$aes_params$width %||% l$stat_params$width %||% 0.9
         next
       }
+      if (k == "dotsize") {
+        params$dotsize <- l$geom_params$dotsize %||% 1
+        next
+      }
+      if (k == "show") {   # turning a layer off leaves it out (fb_edit)
+        params$show <- TRUE
+        next
+      }
       v <- unique(b$data[[i]][[if (k == "size_pt") "size" else k]])
       if (length(v) != 1) next
+      if (k == "linetype" && is.na(v <- fb_lty(v))) next
       params[[k]] <- switch(k, colour = , fill = fb_hex(v), alpha = if (is.na(v)) 1 else v,
                             size_pt = round(v * ggplot2::.pt, 1), v)
     }
@@ -163,6 +231,13 @@ fb_style <- function(p, b) {
                           low = fb_hex(s$map(lim[1])), mid = fb_hex(s$map(mean(lim))), high = fb_hex(s$map(lim[2])))
     }
   }
+  # dot plots with the dot size mapped to a variable (e.g. Seurat's DotPlot): the smallest and largest dot
+  s <- b$plot$scales$get_scales("size")
+  r <- if (!is.null(s) && !s$is_discrete()) fb_pal_range(s)
+  if (length(r) == 2) {
+    name <- ggplot2::get_labs(p)$size
+    scales$size <- list(type = "range", name = if (is.character(name) && length(name) == 1) name else "size", range = r)
+  }
   list(layers = layers, scales = scales)
 }
 
@@ -170,6 +245,11 @@ fb_layer <- function(p, i, v) {
   # A full copy, so the figure as loaded stays unchanged. (Not ggproto(NULL, layer): after a layer has been
   # drawn once, building such a child overflows the stack in ggplot2 4.0.)
   l <- unserialize(serialize(p$layers[[i]], NULL))
+  v$show <- NULL   # a layer turned off is left out in fb_edit
+  if (!is.null(v$dotsize)) {
+    l$geom_params$dotsize <- v$dotsize
+    v$dotsize <- NULL
+  }
   if (!is.null(v$size_pt)) {
     v$size <- v$size_pt / ggplot2::.pt
     v$size_pt <- NULL
@@ -185,9 +265,17 @@ fb_layer <- function(p, i, v) {
   p
 }
 
-# v: list(type = "discrete", values = list(level = colour)) or list(type = "continuous", n = 2|3, low, mid, high, midpoint)
+# v: list(type = "discrete", values = list(level = colour)), list(type = "continuous", n = 2|3, low, mid, high, midpoint)
+#    or, for size, list(type = "range", range = c(smallest, largest))
 fb_scale <- function(p, a, v, built) {
   old <- built$plot$scales$get_scales(a)
+  if (v$type == "range") {   # the same kind of size scale (area or radius), another size range
+    s <- old$clone()
+    pal <- fb_pal(old)
+    environment(pal) <- list2env(list(range = as.numeric(unlist(v$range))), parent = environment(pal))
+    s$palette <- pal
+    return(suppressMessages(p + s))
+  }
   keep <- list(name = old$name, breaks = old$breaks, labels = old$labels, guide = old$guide, na.value = old$na.value, limits = old$limits)
   pick <- function(stem) getExportedValue("ggplot2", paste0("scale_", a, "_", stem))
   sc <- if (v$type == "discrete") do.call(pick("manual"), c(list(values = unlist(v$values)), keep)) else
@@ -226,8 +314,9 @@ fb_heat <- function(g, h) {
 }
 
 # f: a loaded figure (fb_get). e: list(labels = list(x = "...", ...), size = <base font size in pt>,
-#   layers = list("<i>" = list(size = .., ...)), scales = list(colour = .., fill = ..), heat = list(n, low, mid, high)).
-# "" removes a label.
+#   text = list(axis_text_x = list(show = TRUE/FALSE, size = <pt>), ...) (FB_TEXT),
+#   layers = list("<i>" = list(size = .., show = FALSE, ...)), scales = list(colour = .., fill = .., size = ..),
+#   heat = list(n, low, mid, high)). "" removes a label.
 fb_edit <- function(f, e) {
   p <- f$plot
   if (f$kind == "pheatmap") return(if (is.null(e$heat)) p else fb_heat(p, e$heat))
@@ -236,12 +325,18 @@ fb_edit <- function(f, e) {
     # settings are kept per figure in the browser; after the file is re-saved a layer or scale may be gone
     for (i in names(e$layers)) if (as.integer(i) <= length(p$layers)) p <- fb_layer(p, as.integer(i), e$layers[[i]])
     for (a in names(e$scales)) if (!is.null(f$built$plot$scales$get_scales(a))) p <- fb_scale(p, a, e$scales[[a]], f$built)
+    off <- as.integer(names(Filter(function(v) isFALSE(v$show), e$layers)))
+    off <- off[off <= length(p$layers)]
+    if (length(off)) p$layers <- p$layers[-off]
   }
   if (length(e$labels)) p <- p + do.call(ggplot2::labs, lapply(e$labels, function(v) if (identical(v, "")) NULL else v))
-  if (!is.null(e$size)) {
-    th <- ggplot2::theme(text = ggplot2::element_text(size = e$size))
-    p <- if (f$kind == "patchwork") p & th else p + th
+  th <- list()
+  if (!is.null(e$size)) th <- list(ggplot2::theme(text = ggplot2::element_text(size = e$size)))
+  for (k in names(e$text)) {
+    v <- e$text[[k]]
+    th[[length(th) + 1]] <- fb_theme(fb_text_els(k), if (isFALSE(v$show)) ggplot2::element_blank() else ggplot2::element_text(size = v$size))
   }
+  for (t in th) p <- if (f$kind == "patchwork") p & t else p + t
   p
 }
 
