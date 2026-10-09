@@ -40,6 +40,7 @@ export function initCompose(ctx) {
         n.className = 'pnl';
         n.dataset.uid = pn.uid;
         n.innerHTML = '<img alt=""><span class="letter"></span><div class="grip" title="Drag to resize"></div>';
+        if (urls.has(pn.uid)) n.querySelector('img').src = urls.get(pn.uid);   // back from another group
         el.append(n);
       }
       place(n, pn);
@@ -70,21 +71,22 @@ export function initCompose(ctx) {
     const want = JSON.stringify([f.id, f.updated, +pn.w.toFixed(4), +pn.h.toFixed(4), edits]);
     if (drawn.get(pn.uid) === want) return;
     drawn.set(pn.uid, want);
-    const n = $('page').querySelector(`[data-uid="${pn.uid}"]`);
-    n?.classList.add('drawing');
+    const node = () => $('page').querySelector(`[data-uid="${pn.uid}"]`);   // made anew when its group is opened again
+    node()?.classList.add('drawing');
     try {
       await ctx.ensureLoaded(f);
       const png = await ctx.engine(f).drawFigure({ id: f.id, fmt: 'png', w: pn.w, h: pn.h, dpi: PX_IN * Math.min(window.devicePixelRatio || 1, 2), edits });
-      if (drawn.get(pn.uid) !== want || !n?.isConnected) return;   // changed again meanwhile
+      if (drawn.get(pn.uid) !== want) return;   // changed again meanwhile
       if (urls.has(pn.uid)) URL.revokeObjectURL(urls.get(pn.uid));
       urls.set(pn.uid, URL.createObjectURL(new Blob([png], { type: 'image/png' })));
-      n.querySelector('img').src = urls.get(pn.uid);
-      n.title = '';
+      const n = node();
+      if (n) { n.querySelector('img').src = urls.get(pn.uid); n.title = ''; }
     } catch (e) {
       drawn.delete(pn.uid);
+      const n = node();
       if (n) n.title = 'Could not draw: ' + errText(e);
     }
-    n?.classList.remove('drawing');
+    node()?.classList.remove('drawing');
   }
 
   // ---------- adding, moving, resizing ----------
@@ -216,14 +218,14 @@ export function initCompose(ctx) {
     const box = $('selBox');
     if (!sel) { box.innerHTML = '<p class="hint">Click a panel to select it.</p>'; return; }
     const u = prefs.unit, f = figOf(sel), v = k => num(sel[k] * UNITS[u], u);
-    if (box.dataset.uid === sel.uid && box.querySelector('[data-p]')) {   // same panel: refresh the values, not the box being typed in
+    if (box.dataset.uid === sel.uid && box.dataset.unit === u && box.querySelector('[data-p]')) {   // same panel: refresh the values, not the box being typed in
       for (const k of ['x', 'y', 'w', 'h', 'letter']) {
         const i = box.querySelector(`[data-p="${k}"]`);
         if (i !== document.activeElement) i.value = k === 'letter' ? sel.letter : v(k);
       }
       return;
     }
-    box.dataset.uid = sel.uid;
+    box.dataset.uid = sel.uid; box.dataset.unit = u;
     box.innerHTML = `<p class="hint">${esc(f ? f.name : 'Missing figure')}</p>
       <div class="row">${[['x', 'X'], ['y', 'Y'], ['w', 'Width'], ['h', 'Height']].map(([k, l]) =>
         `<label>${l}<input type="number" data-p="${k}" step="${SNAP[u]}" value="${v(k)}"></label>`).join('')}</div>

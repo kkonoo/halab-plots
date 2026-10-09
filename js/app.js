@@ -269,7 +269,7 @@ async function draw() {
     if (f === S.fig) { setImg(null); stageMsg('Could not draw at this size (too small?): ' + errText(e)); }
   }
   drawing = false;
-  if (again) { again = false; draw(); } else busy(false);
+  if (again) { again = false; draw(); } else if (f === S.fig) busy(false);   // else the next figure is still loading
 }
 
 // ---------- size ----------
