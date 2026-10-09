@@ -326,6 +326,9 @@ const PARAMS = {
   alpha: { label: 'Opacity', min: 0, max: 1, step: 0.05 },
   width: { label: 'Width', min: 0.05, max: 1, step: 0.05 },
   linewidth: { label: 'Line width', min: 0, max: 3, step: 0.05 },
+  dotsize: { label: 'Dot size', min: 0.1, max: 3, step: 0.05 },
+  linetype: { label: 'Line type', options: ['solid', 'dashed', 'dotted', 'dotdash', 'longdash', 'twodash'] },
+  show: { label: 'Show', check: true },
   colour: { label: 'Colour' },
   fill: { label: 'Fill' },
 };
@@ -368,7 +371,10 @@ function styleUI() {
     h += `<fieldset class="grp"><legend>${esc(L.name)}</legend>`;
     for (const [p, v0] of Object.entries(L.params)) {
       const P = PARAMS[p], v = e.layers?.[L.i]?.[p] ?? v0, k = `layer.${L.i}.${p}`;
-      h += P.min === undefined
+      h += P.check ? `<label class="ctl">${P.label}<input type="checkbox" data-k="${k}" ${v ? 'checked' : ''}></label>`
+        : P.options ? `<label class="ctl">${P.label}<select data-k="${k}">${[...new Set([...P.options, v])].map(o =>   // + a custom dash pattern
+            `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`
+        : P.min === undefined
         ? `<label class="ctl">${P.label}${colorCtl(k, v)}</label>`
         : `<label class="ctl">${P.label}<span class="pair">
             <input type="range" data-k="${k}" min="${P.min}" max="${Math.max(P.max, v0)}" step="${P.step}" value="${v}">
@@ -377,8 +383,14 @@ function styleUI() {
     h += '</fieldset>';
   }
   for (const [a, sc] of scales) {
-    const title = (a === 'fill' ? 'Fill' : 'Colour') + (sc.name === a ? '' : `: ${sc.name}`);   // name = a when the legend has no title
+    const title = { fill: 'Fill', colour: 'Colour', size: 'Dot size' }[a] + (sc.name === a ? '' : `: ${sc.name}`);   // name = a when the legend has no title
     if (sc.type === 'continuous') { h += gradientUI(`scale.${a}`, title, sc, e.scales?.[a], true); continue; }
+    if (sc.type === 'range') {
+      const r = e.scales?.[a]?.range || sc.range;
+      h += `<fieldset class="grp"><legend>${esc(title)}</legend>${['Smallest', 'Largest'].map((l, j) =>
+        `<label class="ctl">${l}<input type="number" data-k="scale.${a}.${j}" min="0" step="0.1" value="${r[j]}"></label>`).join('')}</fieldset>`;
+      continue;
+    }
     h += `<fieldset class="grp"><legend>${esc(title)}</legend><div class="swatches">${sc.levels.map((lv, j) =>
       `<label class="sw">${colorCtl(`scale.${a}.${j}`, e.scales?.[a]?.values?.[lv] ?? sc.colors[j])}<span>${esc(lv)}</span></label>`).join('')}</div></fieldset>`;
   }
@@ -391,7 +403,7 @@ function styleInput(t) {
   const k = t.dataset.k;
   if (!k) return;
   const [kind, a, b] = k.split('.');
-  let v = t.value;
+  let v = t.type === 'checkbox' ? t.checked : t.value;
   if (t.type === 'range' || t.type === 'number') {
     v = parseFloat(v);
     if (!Number.isFinite(v)) return;
@@ -411,7 +423,11 @@ function styleInput(t) {
   } else if (kind === 'scale') {
     const sc = S.info.style.scales[a];
     e.scales = { ...e.scales };
-    if (sc.type === 'discrete') {
+    if (sc.type === 'range') {
+      const r = [...(e.scales[a]?.range || sc.range)];
+      r[+b] = Math.max(0, v);
+      e.scales[a] = { type: 'range', range: r };
+    } else if (sc.type === 'discrete') {
       const values = e.scales[a]?.values || Object.fromEntries(sc.levels.map((lv, j) => [lv, sc.colors[j]]));
       e.scales[a] = { type: 'discrete', values: { ...values, [sc.levels[+b]]: v } };
     } else {
@@ -440,6 +456,20 @@ $('styleBox').addEventListener('click', e => {
 });
 
 // ---------- text ----------
+// Text parts R found (r/figure.R FB_TEXT): each can be resized or left out
+const TEXTS = {
+  title: 'Title', subtitle: 'Subtitle', caption: 'Caption', axis_title_x: 'Axis title X', axis_title_y: 'Axis title Y',
+  axis_text_x: 'Axis text X', axis_text_y: 'Axis text Y', legend_title: 'Legend title', legend_text: 'Legend text', strip: 'Facet labels',
+};
+
+// A part's size: as set here, else as in the figure — scaled with the base font size when the figure sizes it relative to that
+function partSize(k) {
+  const d = S.info.text[k], set = S.edits.text?.[k]?.size;
+  if (set !== undefined) return set;
+  return d.rel ? +(d.size * (S.edits.size ?? S.info.size) / S.info.size).toFixed(1) : d.size;
+}
+const setPart = (k, o) => { S.edits.text = { ...S.edits.text, [k]: { ...S.edits.text?.[k], ...o } }; };
+
 function textUI() {
   const i = S.info, box = $('textBox');
   if (!i) { box.innerHTML = '<p class="hint">—</p>'; return; }
@@ -454,6 +484,13 @@ function textUI() {
   }
   const size = S.edits.size ?? i.size;
   let html = `<label>Base font size (pt)<input type="number" id="fontSize" min="2" max="40" step="0.5" value="${size ?? ''}"></label>`;
+  if (i.text) {
+    html += Object.keys(i.text).map(k => {
+      const on = S.edits.text?.[k]?.show ?? i.text[k].show;
+      return `<label class="part"><input type="checkbox" data-part="${k}" ${on ? 'checked' : ''}>${TEXTS[k]}
+        <input type="number" data-psize="${k}" min="1" max="40" step="0.5" value="${partSize(k)}" ${on ? '' : 'disabled'} aria-label="${TEXTS[k]} size (pt)"></label>`;
+    }).join('') + '<p class="hint">Sizes in pt. Untick a part to leave it out.</p>';
+  }
   if (i.kind === 'ggplot') {
     const keys = ['title', 'x', 'y', ...Object.keys(i.labels).filter(k => !['title', 'x', 'y'].includes(k))];
     html += keys.map(k => `<label>${LABELS[k]}<input type="text" data-lab="${k}" value="${esc(S.edits.labels?.[k] ?? i.labels[k] ?? '')}"></label>`).join('');
@@ -461,7 +498,7 @@ function textUI() {
   } else {
     html += `<p class="hint">Labels of ${i.kind === 'base' ? 'base R' : 'combined (patchwork)'} figures can't be changed here.</p>`;
   }
-  if (i.kind !== 'base') html += '<p class="hint">Point and in-plot label sizes are under Style.</p>';
+  if (i.kind !== 'base') html += '<p class="hint">Point sizes and in-plot text labels are under Style.</p>';
   html += '<button class="btn" id="resetText">Reset text</button>';
   box.innerHTML = html;
 }
@@ -472,13 +509,23 @@ $('textBox').addEventListener('input', e => {
   else if (t.id === 'fontSize') {
     const v = parseFloat(t.value);
     if (v >= 2 && v <= 40) S.edits.size = v; else delete S.edits.size;
+    for (const n of $('textBox').querySelectorAll('[data-psize]')) n.value = partSize(n.dataset.psize);
+  } else if (t.dataset.part) {
+    setPart(t.dataset.part, { show: t.checked });
+    t.parentElement.querySelector('[data-psize]').disabled = !t.checked;
+  } else if (t.dataset.psize) {
+    const v = parseFloat(t.value);
+    setPart(t.dataset.psize, { size: v >= 1 && v <= 40 ? v : undefined });
   } else return;
   saveFig(); schedule(500);
+});
+$('textBox').addEventListener('change', e => {   // left empty or out of range → show the size in use again
+  if (e.target.dataset.psize) e.target.value = partSize(e.target.dataset.psize);
 });
 
 $('textBox').addEventListener('click', e => {
   if (e.target.id !== 'resetText') return;
-  delete S.edits.labels; delete S.edits.size;
+  delete S.edits.labels; delete S.edits.size; delete S.edits.text;
   saveFig(); textUI(); draw();
 });
 
