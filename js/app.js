@@ -61,10 +61,11 @@ const setStatus = t => { $('rStatus').textContent = t; };
 const rReady = R.startR();
 rReady.then(font => {
   setStatus(font === 'Arial' ? 'R ready · Arial' : 'R ready · Arimo');
+  $('rStatus').dataset.state = 'ok';   // the status dot: amber while starting, green when ready
   $('rStatus').title = font === 'Arial' ? 'Plots use the Arial installed on this computer.'
     : 'Plots use Arimo, which has the same letter widths as Arial.';
   $('fontBtn').hidden = font === 'Arial' || !R.canAskFonts();
-}, e => { console.error(e); setStatus('R could not start — reload the page'); });
+}, e => { console.error(e); setStatus('R could not start — reload the page'); $('rStatus').dataset.state = 'bad'; });
 setStatus('Starting R… (a few seconds on the first visit)');
 start();
 
